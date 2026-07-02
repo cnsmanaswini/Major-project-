@@ -1,0 +1,293 @@
+"""
+Users Router
+GET    /api/users/{username}         → get profile
+POST   /api/users/{id}/follow        → follow/unfollow
+GET    /api/users/{id}/followers     → get followers
+GET    /api/users/{id}/following     → get following
+PUT    /api/users/me                 → update profile
+POST   /api/users/me/avatar          → upload avatar
+GET    /api/users/search             → search users
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_
+from typing import Optional
+
+from models.database import get_db
+from models.models import User, Follow, Post, Notification
+from routers.auth import get_current_user
+from services.cloudinary_service import upload_avatar
+
+router = APIRouter()
+
+
+# ── Get Profile ───────────────────────────────────────────────
+
+@router.get("/search")
+async def search_users(
+    q: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Search users by username or display name."""
+    result = await db.execute(
+        select(User).where(
+            or_(
+                User.username.ilike(f"%{q}%"),
+                User.display_name.ilike(f"%{q}%"),
+            )
+        ).limit(20)
+    )
+    users = result.scalars().all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "display_name": u.display_name,
+            "avatar_url": u.avatar_url,
+            "followers_count": u.followers_count,
+        }
+        for u in users
+    ]
+
+
+@router.get("/me")
+async def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current user's full profile."""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "display_name": current_user.display_name,
+        "avatar_url": current_user.avatar_url,
+        "bio": current_user.bio,
+        "email": current_user.email,
+        "followers_count": current_user.followers_count,
+        "following_count": current_user.following_count,
+        "posts_count": current_user.posts_count,
+        "is_private": current_user.is_private,
+    }
+
+
+@router.get("/{username}")
+async def get_profile(
+    username: str,
+    current_user: Optional[User] = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a user's public profile."""
+    result = await db.execute(
+        select(User).where(User.username == username)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if current user follows this user
+    is_following = False
+    if current_user:
+        follow_result = await db.execute(
+            select(Follow).where(
+                Follow.follower_id == current_user.id,
+                Follow.following_id == user.id,
+            )
+        )
+        is_following = follow_result.scalar_one_or_none() is not None
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "bio": user.bio,
+        "followers_count": user.followers_count,
+        "following_count": user.following_count,
+        "posts_count": user.posts_count,
+        "is_following": is_following,
+        "is_private": user.is_private,
+    }
+
+
+# ── Follow / Unfollow ─────────────────────────────────────────
+
+@router.post("/{user_id}/follow")
+async def toggle_follow(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Follow or unfollow a user."""
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot follow yourself")
+
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check if already following
+    result = await db.execute(
+        select(Follow).where(
+            Follow.follower_id == current_user.id,
+            Follow.following_id == user_id,
+        )
+    )
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        # Unfollow
+        await db.delete(existing)
+        target.followers_count = max(0, (target.followers_count or 1) - 1)
+        current_user.following_count = max(0, (current_user.following_count or 1) - 1)
+        action = "unfollowed"
+    else:
+        # Follow
+        db.add(Follow(
+            follower_id=current_user.id,
+            following_id=user_id,
+        ))
+        target.followers_count = (target.followers_count or 0) + 1
+        current_user.following_count = (current_user.following_count or 0) + 1
+        action = "followed"
+
+        # Send notification
+        db.add(Notification(
+            user_id=user_id,
+            from_user_id=current_user.id,
+            type="follow",
+            message=f"{current_user.username} started following you",
+        ))
+
+    await db.commit()
+    return {
+        "status": action,
+        "followers_count": target.followers_count,
+    }
+
+
+# ── Followers / Following Lists ───────────────────────────────
+
+@router.get("/{user_id}/followers")
+async def get_followers(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Follow).where(Follow.following_id == user_id)
+    )
+    follows = result.scalars().all()
+    users = []
+    for f in follows:
+        u = await db.get(User, f.follower_id)
+        if u:
+            users.append({
+                "id": u.id,
+                "username": u.username,
+                "display_name": u.display_name,
+                "avatar_url": u.avatar_url,
+            })
+    return users
+
+
+@router.get("/{user_id}/following")
+async def get_following(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Follow).where(Follow.follower_id == user_id)
+    )
+    follows = result.scalars().all()
+    users = []
+    for f in follows:
+        u = await db.get(User, f.following_id)
+        if u:
+            users.append({
+                "id": u.id,
+                "username": u.username,
+                "display_name": u.display_name,
+                "avatar_url": u.avatar_url,
+            })
+    return users
+
+
+# ── Update Profile ────────────────────────────────────────────
+
+@router.put("/me")
+async def update_profile(
+    display_name: str = Form(default=None),
+    bio: str = Form(default=None),
+    is_private: bool = Form(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if display_name is not None:
+        current_user.display_name = display_name
+    if bio is not None:
+        current_user.bio = bio
+    if is_private is not None:
+        current_user.is_private = is_private
+
+    await db.commit()
+    await db.refresh(current_user)
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "display_name": current_user.display_name,
+        "bio": current_user.bio,
+        "avatar_url": current_user.avatar_url,
+        "is_private": current_user.is_private,
+    }
+
+
+# ── Upload Avatar ─────────────────────────────────────────────
+
+@router.post("/me/avatar")
+async def update_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    url = await upload_avatar(file, current_user.username)
+    current_user.avatar_url = url
+    await db.commit()
+    return {"avatar_url": url}
+
+
+# ── Notifications ─────────────────────────────────────────────
+
+@router.get("/me/notifications")
+async def get_notifications(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Notification)
+        .where(Notification.user_id == current_user.id)
+        .order_by(Notification.created_at.desc())
+        .limit(30)
+    )
+    notifications = result.scalars().all()
+
+    items = []
+    for n in notifications:
+        from_user = await db.get(User, n.from_user_id) if n.from_user_id else None
+        items.append({
+            "id": n.id,
+            "type": n.type,
+            "message": n.message,
+            "is_read": n.is_read,
+            "created_at": n.created_at,
+            "from_user": {
+                "username": from_user.username,
+                "avatar_url": from_user.avatar_url,
+            } if from_user else None,
+        })
+
+    # Mark all as read
+    for n in notifications:
+        n.is_read = True
+    await db.commit()
+
+    return items

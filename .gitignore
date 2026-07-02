@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.env
+*.db
+*.sqlite3
+*.keras
+*.h5
+*.pt
+*.pth
+
+# HuggingFace model cache
+.cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Misc
+.DS_Store
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
