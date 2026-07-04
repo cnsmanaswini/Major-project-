@@ -14,11 +14,11 @@ from datetime import datetime, timedelta
 import random
 
 DEMO_USERS = [
-    {"id": 1, "username": "alex_mind",      "display_name": "Alex",    "avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=alex"},
-    {"id": 2, "username": "sunrise_maya",   "display_name": "Maya K.", "avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=maya"},
-    {"id": 3, "username": "ravi_thoughts",  "display_name": "Ravi S.", "avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=ravi"},
-    {"id": 4, "username": "priya_runs",     "display_name": "Priya R.","avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=priya"},
-    {"id": 5, "username": "dev_arjun",      "display_name": "Arjun M.","avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=arjun"},
+    {"id": 1, "username": "alex_mind",      "email": "alex@mindgram.demo",   "display_name": "Alex",    "avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=alex"},
+    {"id": 2, "username": "sunrise_maya",   "email": "maya@mindgram.demo",   "display_name": "Maya K.", "avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=maya"},
+    {"id": 3, "username": "ravi_thoughts",  "email": "ravi@mindgram.demo",   "display_name": "Ravi S.", "avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=ravi"},
+    {"id": 4, "username": "priya_runs",     "email": "priya@mindgram.demo",  "display_name": "Priya R.","avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=priya"},
+    {"id": 5, "username": "dev_arjun",      "email": "arjun@mindgram.demo",  "display_name": "Arjun M.","avatar_url": "https://api.dicebear.com/9.x/avataaars/svg?seed=arjun"},
 ]
 
 DEMO_POSTS = [

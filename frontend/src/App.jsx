@@ -42,8 +42,8 @@ function Sidebar() {
   const { user, logout } = useAuth()
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-64 glass-dark border-r border-white/10
-                      flex flex-col z-40">
+    <aside className="hidden md:flex fixed left-0 top-0 h-full w-64 glass-dark border-r border-white/10
+                  flex-col z-40">
       {/* Logo */}
       <div className="p-6 pb-4">
         <div className="flex items-center gap-2.5">
