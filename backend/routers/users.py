@@ -9,6 +9,7 @@ POST   /api/users/me/avatar          → upload avatar
 GET    /api/users/search             → search users
 """
 
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
@@ -60,6 +61,7 @@ async def get_my_profile(
     return {
         "id": current_user.id,
         "username": current_user.username,
+        "username_changed_at": current_user.username_changed_at,
         "display_name": current_user.display_name,
         "avatar_url": current_user.avatar_url,
         "bio": current_user.bio,
@@ -85,8 +87,9 @@ async def get_profile(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if current user follows this user
+    # Check if current user follows this user, and vice versa
     is_following = False
+    follows_you = False
     if current_user:
         follow_result = await db.execute(
             select(Follow).where(
@@ -95,6 +98,14 @@ async def get_profile(
             )
         )
         is_following = follow_result.scalar_one_or_none() is not None
+
+        back_result = await db.execute(
+            select(Follow).where(
+                Follow.follower_id == user.id,
+                Follow.following_id == current_user.id,
+            )
+        )
+        follows_you = back_result.scalar_one_or_none() is not None
 
     return {
         "id": user.id,
@@ -106,6 +117,7 @@ async def get_profile(
         "following_count": user.following_count,
         "posts_count": user.posts_count,
         "is_following": is_following,
+        "follows_you": follows_you,
         "is_private": user.is_private,
     }
 
@@ -219,6 +231,7 @@ async def update_profile(
     display_name: str = Form(default=None),
     bio: str = Form(default=None),
     is_private: bool = Form(default=None),
+    username: str = Form(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -229,6 +242,25 @@ async def update_profile(
     if is_private is not None:
         current_user.is_private = is_private
 
+    if username is not None and username != current_user.username:
+        if current_user.username_changed_at is not None:
+            days_since = (datetime.utcnow() - current_user.username_changed_at).days
+            if days_since < 15:
+                days_left = 15 - days_since
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"You can change your username again in {days_left} day(s).",
+                )
+
+        existing = await db.execute(
+            select(User).where(User.username == username, User.id != current_user.id)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Username already taken")
+
+        current_user.username = username
+        current_user.username_changed_at = datetime.utcnow()
+
     await db.commit()
     await db.refresh(current_user)
     return {
@@ -238,8 +270,8 @@ async def update_profile(
         "bio": current_user.bio,
         "avatar_url": current_user.avatar_url,
         "is_private": current_user.is_private,
+        "username_changed_at": current_user.username_changed_at,
     }
-
 
 # ── Upload Avatar ─────────────────────────────────────────────
 
