@@ -39,7 +39,7 @@ export function AuthProvider({ children }) {
     if (callbackToken) {
       localStorage.setItem('token', callbackToken)
       setToken(callbackToken)
-      window.history.replaceState({}, '', '/')
+      window.location.replace('/')
     }
   }, [])
 

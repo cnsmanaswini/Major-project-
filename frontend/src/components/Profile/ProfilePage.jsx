@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { Grid, List, Settings, Camera, UserPlus, UserMinus, MessageCircle } from 'lucide-react'
+import { Grid, List, Settings, Camera, UserPlus, UserMinus, MessageCircle, LogOut } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { useAuth } from '../../context/AuthContext.jsx'
@@ -8,7 +8,7 @@ import { EmotionBadge, SentimentBar, RiskBadge } from '../Common/Badges.jsx'
 
 export default function ProfilePage() {
   const { username }            = useParams()
-  const { user, api }           = useAuth()
+  const { user, api, logout }           = useAuth()
   const [profile, setProfile]   = useState(null)
   const [posts, setPosts]       = useState([])
   const [analytics, setAnalytics] = useState(null)
@@ -153,12 +153,20 @@ export default function ProfilePage() {
                       <button onClick={() => setEditing(false)} className="btn-ghost text-xs py-1.5 px-3">Cancel</button>
                     </>
                   ) : (
-                    <button
-                      onClick={() => setEditing(true)}
-                      className="btn-ghost text-sm flex items-center gap-1.5"
-                    >
-                      <Settings size={14} /> Edit
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setEditing(true)}
+                        className="btn-ghost text-sm flex items-center gap-1.5"
+                      >
+                        <Settings size={14} /> Edit
+                      </button>
+                      <button
+                        onClick={logout}
+                        className="btn-ghost text-sm flex items-center gap-1.5 text-red-400 hover:text-red-300"
+                      >
+                        <LogOut size={14} /> Logout
+                      </button>
+                    </>
                   )}
                 </div>
               ) : (
