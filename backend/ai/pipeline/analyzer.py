@@ -11,7 +11,14 @@ from ai.pipeline.loader import get_model
 logger = logging.getLogger("mindgram.pipeline")
 
 # Label mappings
+# NOTE: cardiffnlp/twitter-roberta-base-sentiment-latest returns
+# "negative" / "neutral" / "positive" directly (not LABEL_0/1/2 —
+# that scheme belongs to the older non-"latest" checkpoint).
 SENTIMENT_MAP = {
+    "negative": ("negative", -1.0),
+    "neutral":  ("neutral",   0.0),
+    "positive": ("positive",  1.0),
+    # Kept for safety in case a different checkpoint is swapped in later.
     "LABEL_0": ("negative", -1.0),
     "LABEL_1": ("neutral",   0.0),
     "LABEL_2": ("positive",  1.0),
@@ -31,11 +38,26 @@ EMOTION_LABELS = {
 NEGATIVE_EMOTIONS = {"anger", "disgust", "fear", "sadness"}
 
 
+def _top_result(raw) -> dict:
+    """
+    Normalizes HuggingFace pipeline output to a single {label, score} dict.
+
+    With top_k=1 (or top_k=N generally), transformers wraps each input's
+    result in an extra list: model(text) -> [[{"label":..., "score":...}]]
+    So model(text)[0] is still a LIST, not the dict — this unwraps it
+    safely regardless of whether an extra layer is present.
+    """
+    result = raw[0]
+    if isinstance(result, list):
+        result = result[0]
+    return result
+
+
 def run_sentiment(text: str) -> tuple[str, float]:
     """Returns (label, normalized_score ∈ [-1, 1])."""
     model = get_model("sentiment")
-    result = model(text)[0]
-    label_raw = result["label"]
+    result = _top_result(model(text))
+    label_raw = result["label"].lower()
     conf = result["score"]
     label, direction = SENTIMENT_MAP.get(label_raw, ("neutral", 0.0))
     score = direction * conf
@@ -45,7 +67,7 @@ def run_sentiment(text: str) -> tuple[str, float]:
 def run_emotion(text: str) -> tuple[str, float]:
     """Returns (emotion_label, confidence ∈ [0, 1])."""
     model = get_model("emotion")
-    result = model(text)[0]
+    result = _top_result(model(text))
     label = result["label"].lower()
     label = EMOTION_LABELS.get(label, "neutral")
     return label, round(result["score"], 4)
@@ -54,7 +76,7 @@ def run_emotion(text: str) -> tuple[str, float]:
 def run_sarcasm(text: str) -> tuple[bool, float]:
     """Returns (is_sarcastic, confidence ∈ [0, 1])."""
     model = get_model("sarcasm")
-    result = model(text)[0]
+    result = _top_result(model(text))
     is_irony = result["label"].lower() == "irony"
     return is_irony, round(result["score"], 4)
 

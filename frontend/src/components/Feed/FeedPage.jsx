@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Heart, MessageCircle, Share2, Bookmark, Send, Image, RefreshCw, MapPin, Smile } from 'lucide-react'
+import { Heart, MessageCircle, Share2, Bookmark, Send, Image, Video, RefreshCw, MapPin, Smile, X } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { useAuth } from '../../context/AuthContext.jsx'
@@ -308,50 +308,101 @@ function StoriesBar({ stories, onAddStory }) {
 }
 
 // ── Compose Post ──────────────────────────────────────────────
+const MAX_IMAGE_MB = 10
+const MAX_VIDEO_MB = 100
+
 function ComposePost({ onPost }) {
   const { user, api } = useAuth()
   const [content, setContent]       = useState('')
   const [location, setLocation]     = useState('')
-  const [image, setImage]           = useState(null)
+  const [mediaFile, setMediaFile]   = useState(null)   // the actual File
+  const [mediaType, setMediaType]   = useState(null)   // 'image' | 'video'
   const [preview, setPreview]       = useState('')
   const [showExtras, setShowExtras] = useState(false)
   const [posting, setPosting]       = useState(false)
   const [analyzing, setAnalyzing]   = useState(false)
+  const [progress, setProgress]     = useState(0)
+  const [error, setError]           = useState('')
   const fileRef = useRef()
 
-  const handleImage = (e) => {
+  const handleFile = (e) => {
     const file = e.target.files[0]
     if (!file) return
-    setImage(file)
+    setError('')
+
+    const isVideo = file.type.startsWith('video/')
+    const isImage = file.type.startsWith('image/')
+
+    if (!isVideo && !isImage) {
+      setError('Please choose an image or video file.')
+      return
+    }
+
+    const sizeMb = file.size / (1024 * 1024)
+    const maxMb = isVideo ? MAX_VIDEO_MB : MAX_IMAGE_MB
+    if (sizeMb > maxMb) {
+      setError(`File too large (${sizeMb.toFixed(1)}MB). Max is ${maxMb}MB for ${isVideo ? 'videos' : 'images'}.`)
+      return
+    }
+
+    // Clean up any previous preview URL before creating a new one
+    if (preview) URL.revokeObjectURL(preview)
+
+    setMediaFile(file)
+    setMediaType(isVideo ? 'video' : 'image')
     setPreview(URL.createObjectURL(file))
+  }
+
+  const clearMedia = () => {
+    if (preview) URL.revokeObjectURL(preview)
+    setMediaFile(null)
+    setMediaType(null)
+    setPreview('')
+    if (fileRef.current) fileRef.current.value = ''
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!content.trim() && !image) return
+    if (!content.trim() && !mediaFile) return
     setPosting(true)
     setAnalyzing(true)
+    setProgress(0)
+    setError('')
 
     try {
       const formData = new FormData()
       formData.append('content', content)
       formData.append('location', location)
-      if (image) formData.append('image', image)
+
+      // IMPORTANT: field name must match what the backend expects —
+      // 'image' for images, 'video' for videos. Sending a video under
+      // the 'image' key (or vice versa) means the backend silently
+      // skips the upload.
+      if (mediaFile && mediaType === 'image') {
+        formData.append('image', mediaFile)
+      } else if (mediaFile && mediaType === 'video') {
+        formData.append('video', mediaFile)
+        formData.append('is_reel', 'true')
+      }
 
       const res = await api.post('/posts', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (evt) => {
+          if (evt.total) setProgress(Math.round((evt.loaded / evt.total) * 100))
+        },
       })
       onPost(res.data)
       setContent('')
       setLocation('')
-      setImage(null)
-      setPreview('')
+      clearMedia()
       setShowExtras(false)
     } catch (err) {
       console.error(err)
+      setError(err.response?.data?.detail || 'Post failed. Please try again.')
     } finally {
       setPosting(false)
       setAnalyzing(false)
+      setProgress(0)
     }
   }
 
@@ -372,18 +423,48 @@ function ComposePost({ onPost }) {
             className="input-field resize-none text-sm w-full"
           />
 
-          {/* Image preview */}
-          {preview && (
+          {/* Media preview */}
+          {preview && mediaType === 'image' && (
             <div className="relative mt-2 rounded-xl overflow-hidden">
               <img src={preview} alt="" className="w-full max-h-48 object-cover" />
               <button
-                onClick={() => { setImage(null); setPreview('') }}
+                type="button"
+                onClick={clearMedia}
                 className="absolute top-2 right-2 w-6 h-6 rounded-full bg-black/60 text-white
                            flex items-center justify-center text-xs hover:bg-black/80"
               >
-                ✕
+                <X size={12} />
               </button>
             </div>
+          )}
+
+          {preview && mediaType === 'video' && (
+            <div className="relative mt-2 rounded-xl overflow-hidden bg-black">
+              <video src={preview} className="w-full max-h-64 object-contain" controls playsInline />
+              <button
+                type="button"
+                onClick={clearMedia}
+                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-black/60 text-white
+                           flex items-center justify-center text-xs hover:bg-black/80"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
+          {/* Upload progress */}
+          {posting && progress > 0 && progress < 100 && (
+            <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-brand-500 transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <p className="text-xs text-red-400 mt-2">{error}</p>
           )}
 
           {/* Location input */}
@@ -402,7 +483,7 @@ function ComposePost({ onPost }) {
                 ref={fileRef}
                 type="file"
                 accept="image/*,video/*"
-                onChange={handleImage}
+                onChange={handleFile}
                 className="hidden"
               />
               <button
@@ -410,7 +491,7 @@ function ComposePost({ onPost }) {
                 onClick={() => fileRef.current.click()}
                 className="btn-ghost py-1.5 px-2 text-xs flex items-center gap-1"
               >
-                <Image size={14} /> Photo
+                {mediaType === 'video' ? <Video size={14} /> : <Image size={14} />} Media
               </button>
               <button
                 type="button"
@@ -423,14 +504,14 @@ function ComposePost({ onPost }) {
 
             <button
               onClick={handleSubmit}
-              disabled={(!content.trim() && !image) || posting}
+              disabled={(!content.trim() && !mediaFile) || posting}
               className="btn-primary py-1.5 px-4 text-sm disabled:opacity-40
                          flex items-center gap-1.5"
             >
               {analyzing ? (
                 <>
                   <RefreshCw size={12} className="animate-spin" />
-                  Analyzing...
+                  {progress > 0 && progress < 100 ? `Uploading ${progress}%` : 'Analyzing...'}
                 </>
               ) : (
                 <>
