@@ -7,6 +7,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 
@@ -16,6 +17,7 @@ from models.database import create_tables
 from ai.pipeline.loader import preload_models
 from ai.rag.index import build_rag_index
 from config import settings
+from services.cloudinary_service import UPLOAD_ROOT
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mindgram")
@@ -70,6 +72,10 @@ app.include_router(messages.router,         prefix="/api/messages",     tags=["M
 app.include_router(analytics.router,        prefix="/api/analytics",    tags=["Analytics"])
 app.include_router(interactions.router,     prefix="/api/interactions",  tags=["Interactions"])
 app.include_router(agents.router,           prefix="/api/agents",       tags=["Agents"])
+
+# Serve locally uploaded media (used when Cloudinary is not configured)
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
 
 
 @app.get("/")

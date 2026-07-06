@@ -62,6 +62,8 @@ class Post(Base):
     content     = Column(Text, default="")
     image_url   = Column(String(500), default="")
     video_url   = Column(String(500), default="")
+    image_public_id = Column(String(255), default="")   # ← new: needed to delete from Cloudinary
+    video_public_id = Column(String(255), default="")   # ← new
     is_reel     = Column(Boolean, default=False)
     location    = Column(String(255), default="")
     created_at  = Column(DateTime, default=datetime.utcnow)

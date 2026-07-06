@@ -107,9 +107,9 @@ function PostCard({ post, onLike }) {
         </div>
       </div>
 
-      {/* Image */}
+      {/* Image — square like Instagram */}
       {post.image_url && (
-        <div className="relative overflow-hidden bg-gray-900" style={{ aspectRatio: '4/3' }}>
+        <div className="relative overflow-hidden bg-gray-900" style={{ aspectRatio: '1/1' }}>
           <img
             src={post.image_url}
             alt=""
@@ -128,13 +128,6 @@ function PostCard({ post, onLike }) {
             controls
             playsInline
           />
-        </div>
-      )}
-
-      {/* Content */}
-      {post.content && (
-        <div className="px-4 pt-3 pb-1">
-          <p className="text-gray-200 text-sm leading-relaxed">{post.content}</p>
         </div>
       )}
 
@@ -182,6 +175,18 @@ function PostCard({ post, onLike }) {
           AI
         </button>
       </div>
+
+      {/* Caption — Instagram style: username + text */}
+      {post.content && (
+        <div className="px-4 pb-2">
+          <p className="text-sm text-gray-200 leading-relaxed">
+            <span className="font-semibold text-white mr-1.5">
+              {post.author?.username}
+            </span>
+            {post.content}
+          </p>
+        </div>
+      )}
 
       {/* AI Panel */}
       {showAI && (
@@ -418,15 +423,15 @@ function ComposePost({ onPost }) {
           <textarea
             value={content}
             onChange={e => setContent(e.target.value)}
-            placeholder="What's on your mind?"
-            rows={2}
+            placeholder={mediaType === 'image' ? 'Write a caption...' : "What's on your mind?"}
+            rows={mediaFile ? 2 : 2}
             className="input-field resize-none text-sm w-full"
           />
 
-          {/* Media preview */}
+          {/* Media preview — square crop like Instagram */}
           {preview && mediaType === 'image' && (
-            <div className="relative mt-2 rounded-xl overflow-hidden">
-              <img src={preview} alt="" className="w-full max-h-48 object-cover" />
+            <div className="relative mt-2 rounded-xl overflow-hidden bg-gray-900" style={{ aspectRatio: '1/1' }}>
+              <img src={preview} alt="" className="w-full h-full object-cover" />
               <button
                 type="button"
                 onClick={clearMedia}

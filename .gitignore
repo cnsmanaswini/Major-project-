@@ -14,14 +14,31 @@ venv/
 # HuggingFace model cache
 .cache/
 
+# Uploads (local development only)
+backend/uploads/
+
+# Python cache
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
 # Node
 node_modules/
 dist/
 .vite/
 
-# Misc
+# Environment
+frontend/.env
+backend/.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
 *.log
-.pytest_cache/
-.coverage
-htmlcov/
