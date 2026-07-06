@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Send, Search, Circle } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
+import { Send, Search, Circle, MessageCircle } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { useAuth } from '../../context/AuthContext.jsx'
@@ -9,13 +10,16 @@ import { EmotionBadge } from '../Common/Badges.jsx'
 export default function MessagesPage() {
   const { user, api }               = useAuth()
   const { sendMessage, on, isConnected } = useSocket()
+  const location = useLocation()
   const [conversations, setConversations] = useState([])
-  const [selected, setSelected]     = useState(null)
+  const [selected, setSelected]     = useState(location.state?.selectedUser || null)
   const [thread, setThread]         = useState([])
   const [input, setInput]           = useState('')
   const [search, setSearch]         = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [loading, setLoading]       = useState(false)
+  const [mutual, setMutual]         = useState(null)
+  const [wsError, setWsError]       = useState('')
   const bottomRef = useRef()
 
   // Load conversations
@@ -34,6 +38,24 @@ export default function MessagesPage() {
       .catch(() => setThread([]))
       .finally(() => setLoading(false))
   }, [selected])
+
+  // Check mutual-follow status when selecting a conversation
+  useEffect(() => {
+    if (!selected) { setMutual(null); return }
+    setMutual(null)
+    setWsError('')
+    api.get(`/users/${selected.username}`)
+      .then(r => setMutual(r.data.is_following && r.data.follows_you))
+      .catch(() => setMutual(false))
+  }, [selected])
+
+  // Listen for server-side rejection (e.g. not mutual followers)
+  useEffect(() => {
+    const cleanup = on('error', (data) => {
+      setWsError(data.detail || 'Message could not be sent.')
+    })
+    return cleanup
+  }, [])
 
   // Listen for new messages via WebSocket
   useEffect(() => {
@@ -81,7 +103,7 @@ export default function MessagesPage() {
 
   const handleSend = (e) => {
     e.preventDefault()
-    if (!input.trim() || !selected) return
+    if (!input.trim() || !selected || !mutual) return
     sendMessage(selected.id, input.trim())
     setInput('')
   }
@@ -251,26 +273,38 @@ export default function MessagesPage() {
             </div>
 
             {/* Input */}
-            <div className="p-4 border-t border-white/10 bg-black/20">
-              <form onSubmit={handleSend} className="flex gap-2">
-                <input
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  placeholder="Type a message..."
-                  className="input-field text-sm flex-1"
-                />
-                <button
-                  type="submit"
-                  disabled={!input.trim()}
-                  className="btn-primary p-2.5 disabled:opacity-40"
-                >
-                  <Send size={16} />
-                </button>
-              </form>
-              <p className="text-[10px] text-gray-600 mt-1.5 text-center">
-                Messages are privately analyzed for your wellbeing 💜
-              </p>
-            </div>
+            {mutual === false ? (
+              <div className="p-4 border-t border-white/10 bg-black/20 text-center">
+                <p className="text-xs text-gray-500">
+                  You can only message users who follow you back and who you follow too.
+                </p>
+              </div>
+            ) : (
+              <div className="p-4 border-t border-white/10 bg-black/20">
+                {wsError && (
+                  <p className="text-xs text-red-400 mb-2 text-center">{wsError}</p>
+                )}
+                <form onSubmit={handleSend} className="flex gap-2">
+                  <input
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    placeholder="Type a message..."
+                    disabled={mutual !== true}
+                    className="input-field text-sm flex-1 disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!input.trim() || mutual !== true}
+                    className="btn-primary p-2.5 disabled:opacity-40"
+                  >
+                    <Send size={16} />
+                  </button>
+                </form>
+                <p className="text-[10px] text-gray-600 mt-1.5 text-center">
+                  Messages are privately analyzed for your wellbeing 💜
+                </p>
+              </div>
+            )}
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">

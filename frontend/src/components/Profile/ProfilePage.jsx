@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
+import { useParams , useNavigate} from 'react-router-dom'
 import { Grid, List, Settings, Camera, UserPlus, UserMinus, MessageCircle, LogOut } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
@@ -8,6 +9,7 @@ import { EmotionBadge, SentimentBar, RiskBadge } from '../Common/Badges.jsx'
 
 export default function ProfilePage() {
   const { username }            = useParams()
+  const navigate                 = useNavigate()
   const { user, api, logout }           = useAuth()
   const [profile, setProfile]   = useState(null)
   const [posts, setPosts]       = useState([])
@@ -17,7 +19,25 @@ export default function ProfilePage() {
   const [selected, setSelected] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [editing, setEditing]   = useState(false)
-  const [editForm, setEditForm] = useState({ display_name: '', bio: '' })
+  const [editForm, setEditForm] = useState({ display_name: '', bio: '', username: '' })
+  const [usernameError, setUsernameError] = useState('')
+  const [listModal, setListModal] = useState(null)   // 'followers' | 'following' | null
+  const [listUsers, setListUsers] = useState([])
+  const [listLoading, setListLoading] = useState(false)
+
+  const openList = async (type) => {
+    if (!profile) return
+    setListModal(type)
+    setListLoading(true)
+    try {
+      const res = await api.get(`/users/${profile.id}/${type}`)
+      setListUsers(res.data || [])
+    } catch {
+      setListUsers([])
+    } finally {
+      setListLoading(false)
+    }
+  }
   const fileRef = useRef()
 
   const isOwn = !username || username === user?.username
@@ -42,6 +62,7 @@ export default function ProfilePage() {
       setEditForm({
         display_name: profileRes.data.display_name || '',
         bio: profileRes.data.bio || '',
+        username: profileRes.data.username || '',
       })
     }).finally(() => setLoading(false))
   }, [username, user])
@@ -72,15 +93,30 @@ export default function ProfilePage() {
   }
 
   const handleEditSave = async () => {
+    setUsernameError('')
     try {
       const formData = new FormData()
       formData.append('display_name', editForm.display_name)
       formData.append('bio', editForm.bio)
+      if (editForm.username !== profile.username) {
+        formData.append('username', editForm.username)
+      }
       const res = await api.put('/users/me', formData)
       setProfile(prev => ({ ...prev, ...res.data }))
       setEditing(false)
-    } catch {}
+    } catch (err) {
+      if (err.response?.status === 429 || err.response?.status === 409) {
+        setUsernameError(err.response.data.detail)
+      }
+    }
   }
+
+  const daysSinceUsernameChange = profile?.username_changed_at
+    ? Math.floor((Date.now() - new Date(profile.username_changed_at)) / (1000 * 60 * 60 * 24))
+    : null
+  const usernameCooldownDaysLeft = daysSinceUsernameChange !== null
+    ? Math.max(0, 15 - daysSinceUsernameChange)
+    : 0
 
   if (loading) return (
     <div className="flex items-center justify-center min-h-screen">
@@ -133,12 +169,31 @@ export default function ProfilePage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
               <div>
-                {editing ? (
-                  <input
-                    value={editForm.display_name}
-                    onChange={e => setEditForm(f => ({ ...f, display_name: e.target.value }))}
-                    className="input-field text-lg font-display mb-1"
-                  />
+              {editing ? (
+                  <>
+                    <input
+                      value={editForm.display_name}
+                      onChange={e => setEditForm(f => ({ ...f, display_name: e.target.value }))}
+                      className="input-field text-lg font-display mb-1"
+                    />
+                    <div className="flex items-center gap-1 mb-1">
+                      <span className="text-gray-500 text-sm">@</span>
+                      <input
+                        value={editForm.username}
+                        onChange={e => setEditForm(f => ({ ...f, username: e.target.value }))}
+                        disabled={usernameCooldownDaysLeft > 0}
+                        className="input-field text-sm py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
+                    </div>
+                    {usernameCooldownDaysLeft > 0 && (
+                      <p className="text-xs text-amber-400 mb-1">
+                        You can change your username again in {usernameCooldownDaysLeft} day{usernameCooldownDaysLeft !== 1 ? 's' : ''}.
+                      </p>
+                    )}
+                    {usernameError && (
+                      <p className="text-xs text-red-400 mb-1">{usernameError}</p>
+                    )}
+                  </>
                 ) : (
                   <h2 className="font-display text-2xl text-white">{profile.display_name}</h2>
                 )}
@@ -185,7 +240,10 @@ export default function ProfilePage() {
                       : <><UserPlus size={14} /> Follow</>
                     }
                   </button>
-                  <button className="btn-ghost text-sm flex items-center gap-1.5 px-3">
+                  <button
+                    onClick={() => navigate('/messages', { state: { selectedUser: profile } })}
+                    className="btn-ghost text-sm flex items-center gap-1.5 px-3"
+                  >
                     <MessageCircle size={14} />
                   </button>
                 </div>
@@ -213,12 +271,19 @@ export default function ProfilePage() {
                 { label: 'Posts',     value: profile.posts_count || posts.length },
                 { label: 'Followers', value: profile.followers_count || 0 },
                 { label: 'Following', value: profile.following_count || 0 },
-              ].map(({ label, value }) => (
-                <div key={label} className="text-center">
-                  <p className="font-bold text-white font-display text-lg">{value}</p>
-                  <p className="text-xs text-gray-500">{label}</p>
-                </div>
-              ))}
+              ].map(({ label, value }) => {
+                const clickable = label === 'Followers' || label === 'Following'
+                return (
+                  <div
+                    key={label}
+                    onClick={clickable ? () => openList(label.toLowerCase()) : undefined}
+                    className={clsx('text-center', clickable && 'cursor-pointer hover:opacity-75 transition-opacity')}
+                  >
+                    <p className="font-bold text-white font-display text-lg">{value}</p>
+                    <p className="text-xs text-gray-500">{label}</p>
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>
@@ -400,6 +465,54 @@ export default function ProfilePage() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Followers / Following list modal */}
+      {listModal && (
+        <div
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+          onClick={() => setListModal(null)}
+        >
+          <div
+            className="card w-full max-w-sm max-h-[70vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-white/10">
+              <h3 className="font-display text-lg text-white capitalize">{listModal}</h3>
+              <button onClick={() => setListModal(null)} className="text-gray-500 hover:text-white">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-2">
+              {listLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+                </div>
+              ) : listUsers.length === 0 ? (
+                <p className="text-gray-500 text-sm text-center py-8">No {listModal} yet</p>
+              ) : (
+                listUsers.map(u => (
+                  <button
+                    key={u.id}
+                    onClick={() => {
+                      setListModal(null)
+                      navigate(`/profile/${u.username}`)
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition-all text-left"
+                  >
+                    <img
+                      src={u.avatar_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${u.username}`}
+                      alt=""
+                      className="w-9 h-9 rounded-full bg-gray-800"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{u.display_name}</p>
+                      <p className="text-xs text-gray-500 truncate">@{u.username}</p>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

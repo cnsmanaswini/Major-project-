@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Heart, MessageCircle, Share2, Bookmark, Send, Image, Video, RefreshCw, MapPin, Smile, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Heart, MessageCircle, Share2, Bookmark, Send, Image, Video, RefreshCw, MapPin, Smile, Search, X } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { useAuth } from '../../context/AuthContext.jsx'
@@ -535,12 +536,26 @@ function ComposePost({ onPost }) {
 // ── Feed Page ─────────────────────────────────────────────────
 export default function FeedPage({ explore = false }) {
   const { api, user }   = useAuth()
+  const navigate         = useNavigate()
   const [posts, setPosts]           = useState([])
   const [stories, setStories]       = useState([])
   const [agentStatus, setAgentStatus] = useState(null)
   const [loading, setLoading]       = useState(true)
   const [page, setPage]             = useState(0)
   const [hasMore, setHasMore]       = useState(true)
+  const [search, setSearch]               = useState('')
+  const [searchResults, setSearchResults] = useState([])
+
+  // Search users (Explore page only)
+  useEffect(() => {
+    if (!explore || !search.trim()) { setSearchResults([]); return }
+    const timer = setTimeout(() => {
+      api.get(`/users/search?q=${search}`)
+        .then(r => setSearchResults(r.data))
+        .catch(() => {})
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [search, explore])
 
   const load = useCallback(async (reset = false) => {
     setLoading(true)
@@ -587,6 +602,45 @@ export default function FeedPage({ explore = false }) {
           Refresh
         </button>
       </div>
+
+      {/* Search people (Explore only) */}
+      {explore && (
+        <div className="relative mb-6">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search people..."
+            className="input-field pl-8 text-sm py-2.5 w-full"
+          />
+          {searchResults.length > 0 && (
+            <div className="absolute z-30 mt-1 w-full card p-1 max-h-64 overflow-y-auto">
+              {searchResults.map(u => (
+                <button
+                  key={u.id}
+                  onClick={() => {
+                    setSearch('')
+                    setSearchResults([])
+                    navigate(`/profile/${u.username}`)
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-all text-left"
+                >
+                  <img
+                    src={u.avatar_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${u.username}`}
+                    alt=""
+                    className="w-8 h-8 rounded-full bg-gray-800"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm text-white truncate">{u.display_name}</p>
+                    <p className="text-xs text-gray-500 truncate">@{u.username}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
 
       {/* Stories */}
       {!explore && (
