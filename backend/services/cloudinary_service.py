@@ -1,172 +1,134 @@
 """
-Cloudinary Service
-Handles image and video uploads for posts, stories, reels and avatars
+Cloudinary upload service
+Handles image + video uploads for posts, reels, and profile avatars.
 """
 
+import os
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api
 from fastapi import UploadFile, HTTPException
 import logging
 
-from config import settings
-
 logger = logging.getLogger("mindgram.cloudinary")
 
-# Configure Cloudinary
 cloudinary.config(
-    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
-    api_key=settings.CLOUDINARY_API_KEY,
-    api_secret=settings.CLOUDINARY_API_SECRET,
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
     secure=True,
 )
 
-# Allowed file types
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
-MAX_IMAGE_SIZE = 10 * 1024 * 1024   # 10MB
-MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
+
+MAX_IMAGE_SIZE_MB = 10
+MAX_VIDEO_SIZE_MB = 100
 
 
-async def upload_image(
-    file: UploadFile,
-    folder: str = "mindgram/posts",
-    transformation: dict = None,
-) -> dict:
+async def _read_and_validate(file: UploadFile, allowed_types: set[str], max_size_mb: int) -> bytes:
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file.content_type}",
+        )
+
+    contents = await file.read()
+    size_mb = len(contents) / (1024 * 1024)
+    if size_mb > max_size_mb:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large ({size_mb:.1f}MB). Max is {max_size_mb}MB.",
+        )
+    return contents
+
+
+async def upload_image(file: UploadFile, folder: str = "mindgram/posts") -> dict:
     """
-    Upload an image to Cloudinary.
+    Uploads an image to Cloudinary.
     Returns dict with url, public_id, width, height.
     """
-    # Validate type
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type. Allowed: {ALLOWED_IMAGE_TYPES}"
-        )
-
-    # Read file
-    contents = await file.read()
-
-    # Validate size
-    if len(contents) > MAX_IMAGE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail="Image too large. Max size is 10MB."
-        )
+    contents = await _read_and_validate(file, ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_MB)
 
     try:
-        # Upload to Cloudinary
         result = cloudinary.uploader.upload(
             contents,
             folder=folder,
-            transformation=transformation or [
-                {"width": 1080, "crop": "limit"},
-                {"quality": "auto"},
-                {"fetch_format": "auto"},
-            ],
             resource_type="image",
+            transformation=[{"quality": "auto", "fetch_format": "auto"}],
         )
-
-        logger.info(f"Image uploaded: {result['public_id']}")
-        return {
-            "url": result["secure_url"],
-            "public_id": result["public_id"],
-            "width": result.get("width"),
-            "height": result.get("height"),
-        }
-
     except Exception as e:
-        logger.error(f"Cloudinary upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Image upload failed")
+        logger.error(f"Cloudinary image upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Image upload failed")
+
+    return {
+        "url": result["secure_url"],
+        "public_id": result["public_id"],
+        "width": result.get("width"),
+        "height": result.get("height"),
+    }
 
 
-async def upload_video(
-    file: UploadFile,
-    folder: str = "mindgram/reels",
-) -> dict:
+async def upload_video(file: UploadFile, folder: str = "mindgram/reels") -> dict:
     """
-    Upload a video to Cloudinary.
+    Uploads a video to Cloudinary.
     Returns dict with url, public_id, duration, thumbnail_url.
     """
-    if file.content_type not in ALLOWED_VIDEO_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type. Allowed: {ALLOWED_VIDEO_TYPES}"
-        )
-
-    contents = await file.read()
-
-    if len(contents) > MAX_VIDEO_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail="Video too large. Max size is 100MB."
-        )
+    contents = await _read_and_validate(file, ALLOWED_VIDEO_TYPES, MAX_VIDEO_SIZE_MB)
 
     try:
         result = cloudinary.uploader.upload(
             contents,
             folder=folder,
             resource_type="video",
-            eager=[
-                {"format": "mp4", "quality": "auto"},
-            ],
-            eager_async=True,
+            eager=[{"format": "jpg", "start_offset": "0"}],  # auto-generate a thumbnail
         )
-
-        # Generate thumbnail
-        thumbnail_url = cloudinary.utils.cloudinary_url(
-            result["public_id"],
-            resource_type="video",
-            format="jpg",
-            transformation=[
-                {"width": 400, "height": 400, "crop": "fill"},
-                {"quality": "auto"},
-            ]
-        )[0]
-
-        logger.info(f"Video uploaded: {result['public_id']}")
-        return {
-            "url": result["secure_url"],
-            "public_id": result["public_id"],
-            "thumbnail_url": thumbnail_url,
-            "duration": result.get("duration", 0),
-        }
-
     except Exception as e:
         logger.error(f"Cloudinary video upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Video upload failed")
+        raise HTTPException(status_code=502, detail="Video upload failed")
+
+    thumbnail_url = None
+    if result.get("eager"):
+        thumbnail_url = result["eager"][0].get("secure_url")
+
+    return {
+        "url": result["secure_url"],
+        "public_id": result["public_id"],
+        "duration": result.get("duration"),
+        "thumbnail_url": thumbnail_url,
+    }
 
 
-async def upload_avatar(file: UploadFile, username: str) -> str:
-    """Upload a profile avatar. Returns the URL."""
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=400, detail="Invalid image type")
-
-    contents = await file.read()
+async def upload_avatar(file: UploadFile, identifier: str | int) -> dict:
+    """
+    Uploads a profile avatar. Fixed folder + overwrite so each user has one avatar.
+    `identifier` can be a user id or username — just needs to be unique per user.
+    """
+    contents = await _read_and_validate(file, ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE_MB)
 
     try:
         result = cloudinary.uploader.upload(
             contents,
             folder="mindgram/avatars",
-            public_id=f"avatar_{username}",
+            public_id=f"user_{identifier}",
             overwrite=True,
+            resource_type="image",
             transformation=[
                 {"width": 400, "height": 400, "crop": "fill", "gravity": "face"},
-                {"quality": "auto"},
-                {"fetch_format": "auto"},
+                {"quality": "auto", "fetch_format": "auto"},
             ],
         )
-        return result["secure_url"]
-
     except Exception as e:
-        logger.error(f"Avatar upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Avatar upload failed")
+        logger.error(f"Cloudinary avatar upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Avatar upload failed")
+
+    return {"url": result["secure_url"], "public_id": result["public_id"]}
 
 
-async def delete_media(public_id: str, resource_type: str = "image"):
-    """Delete a file from Cloudinary."""
+def delete_asset(public_id: str, resource_type: str = "image") -> bool:
+    """Deletes an asset from Cloudinary (e.g. when a post is deleted)."""
     try:
         cloudinary.uploader.destroy(public_id, resource_type=resource_type)
-        logger.info(f"Deleted media: {public_id}")
+        return True
     except Exception as e:
-        logger.warning(f"Failed to delete media {public_id}: {e}")
+        logger.error(f"Cloudinary delete failed for {public_id}: {e}")
+        return False

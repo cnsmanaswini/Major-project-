@@ -281,10 +281,10 @@ async def update_avatar(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    url = await upload_avatar(file, current_user.username)
-    current_user.avatar_url = url
+    result = await upload_avatar(file, current_user.username)
+    current_user.avatar_url = result["url"]
     await db.commit()
-    return {"avatar_url": url}
+    return {"avatar_url": result["url"]}
 
 
 # ── Notifications ─────────────────────────────────────────────
