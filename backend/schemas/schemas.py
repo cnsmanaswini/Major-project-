@@ -34,6 +34,8 @@ class PostCreate(BaseModel):
     user_id: int
     content: str
     image_url: Optional[str] = ""
+    video_url: Optional[str] = ""
+    location: Optional[str] = ""
     is_reel: bool = False
 
 
@@ -42,7 +44,9 @@ class PostOut(BaseModel):
     user_id: int
     content: str
     image_url: str
+    video_url: str
     is_reel: bool
+    location: str
     created_at: datetime
     sentiment: str
     sentiment_score: float

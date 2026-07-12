@@ -17,6 +17,7 @@ class User(Base):
     __tablename__ = "users"
     id              = Column(Integer, primary_key=True, index=True)
     username        = Column(String(50), unique=True, index=True, nullable=False)
+    username_changed_at = Column(DateTime, nullable=True)  # tracks 15-day cooldown
     email           = Column(String(255), unique=True, index=True, nullable=False)
     display_name    = Column(String(100))
     avatar_url      = Column(String(500), default="")
@@ -80,6 +81,8 @@ class Post(Base):
     content     = Column(Text, default="")
     image_url   = Column(String(500), default="")
     video_url   = Column(String(500), default="")
+    image_public_id = Column(String(255), default="")   # ← new: needed to delete from Cloudinary
+    video_public_id = Column(String(255), default="")   # ← new
     is_reel     = Column(Boolean, default=False)
     location    = Column(String(255), default="")
     created_at  = Column(DateTime, default=datetime.utcnow)

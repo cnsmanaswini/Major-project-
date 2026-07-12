@@ -14,12 +14,28 @@ from typing import Dict, List
 import json
 from services.notification_service import create_notification
 from models.database import get_db
-from models.models import Message, User, EmotionLog 
+from models.models import Message, User, EmotionLog, Notification
 from schemas.schemas import MessageCreate, MessageOut
 from routers.auth import get_current_user
 from ai.pipeline.analyzer import analyze_text
 
 router = APIRouter()
+
+
+async def are_mutual_followers(db: AsyncSession, user_a_id: int, user_b_id: int) -> bool:
+    """True only if each user follows the other."""
+    result = await db.execute(
+        select(Follow).where(
+            or_(
+                and_(Follow.follower_id == user_a_id, Follow.following_id == user_b_id),
+                and_(Follow.follower_id == user_b_id, Follow.following_id == user_a_id),
+            )
+        )
+    )
+    follows = result.scalars().all()
+    a_follows_b = any(f.follower_id == user_a_id and f.following_id == user_b_id for f in follows)
+    b_follows_a = any(f.follower_id == user_b_id and f.following_id == user_a_id for f in follows)
+    return a_follows_b and b_follows_a
 
 
 # ── WebSocket Connection Manager ──────────────────────────────
@@ -87,6 +103,15 @@ async def websocket_chat(
             sender = await db.get(User, user_id)
             receiver = await db.get(User, receiver_id)
             if not sender or not receiver:
+                continue
+
+            # Only allow messaging between mutual followers
+            if not await are_mutual_followers(db, user_id, receiver_id):
+                await manager.send_to_user(user_id, {
+                    "type": "error",
+                    "detail": "You can only message users who follow you back.",
+                    "receiver_id": receiver_id,
+                })
                 continue
 
             # Run AI pipeline silently
@@ -169,6 +194,12 @@ async def send_message(
     if not receiver:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if not await are_mutual_followers(db, current_user.id, body.receiver_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only message users who follow you back.",
+        )
+        
     pipeline = analyze_text(body.content)
 
     msg = Message(

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Heart, MessageCircle, Share2, Bookmark, Send, Image, Video, RefreshCw, MapPin, Smile, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Heart, MessageCircle, Share2, Bookmark, Send, Image, Video, RefreshCw, MapPin, Smile, Search, X } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { useAuth } from '../../context/AuthContext.jsx'
@@ -107,9 +108,9 @@ function PostCard({ post, onLike }) {
         </div>
       </div>
 
-      {/* Image */}
+      {/* Image — square like Instagram */}
       {post.image_url && (
-        <div className="relative overflow-hidden bg-gray-900" style={{ aspectRatio: '4/3' }}>
+        <div className="relative overflow-hidden bg-gray-900" style={{ aspectRatio: '1/1' }}>
           <img
             src={post.image_url}
             alt=""
@@ -128,13 +129,6 @@ function PostCard({ post, onLike }) {
             controls
             playsInline
           />
-        </div>
-      )}
-
-      {/* Content */}
-      {post.content && (
-        <div className="px-4 pt-3 pb-1">
-          <p className="text-gray-200 text-sm leading-relaxed">{post.content}</p>
         </div>
       )}
 
@@ -182,6 +176,18 @@ function PostCard({ post, onLike }) {
           AI
         </button>
       </div>
+
+      {/* Caption — Instagram style: username + text */}
+      {post.content && (
+        <div className="px-4 pb-2">
+          <p className="text-sm text-gray-200 leading-relaxed">
+            <span className="font-semibold text-white mr-1.5">
+              {post.author?.username}
+            </span>
+            {post.content}
+          </p>
+        </div>
+      )}
 
       {/* AI Panel */}
       {showAI && (
@@ -418,15 +424,15 @@ function ComposePost({ onPost }) {
           <textarea
             value={content}
             onChange={e => setContent(e.target.value)}
-            placeholder="What's on your mind?"
-            rows={2}
+            placeholder={mediaType === 'image' ? 'Write a caption...' : "What's on your mind?"}
+            rows={mediaFile ? 2 : 2}
             className="input-field resize-none text-sm w-full"
           />
 
-          {/* Media preview */}
+          {/* Media preview — square crop like Instagram */}
           {preview && mediaType === 'image' && (
-            <div className="relative mt-2 rounded-xl overflow-hidden">
-              <img src={preview} alt="" className="w-full max-h-48 object-cover" />
+            <div className="relative mt-2 rounded-xl overflow-hidden bg-gray-900" style={{ aspectRatio: '1/1' }}>
+              <img src={preview} alt="" className="w-full h-full object-cover" />
               <button
                 type="button"
                 onClick={clearMedia}
@@ -530,12 +536,26 @@ function ComposePost({ onPost }) {
 // ── Feed Page ─────────────────────────────────────────────────
 export default function FeedPage({ explore = false }) {
   const { api, user }   = useAuth()
+  const navigate         = useNavigate()
   const [posts, setPosts]           = useState([])
   const [stories, setStories]       = useState([])
   const [agentStatus, setAgentStatus] = useState(null)
   const [loading, setLoading]       = useState(true)
   const [page, setPage]             = useState(0)
   const [hasMore, setHasMore]       = useState(true)
+  const [search, setSearch]               = useState('')
+  const [searchResults, setSearchResults] = useState([])
+
+  // Search users (Explore page only)
+  useEffect(() => {
+    if (!explore || !search.trim()) { setSearchResults([]); return }
+    const timer = setTimeout(() => {
+      api.get(`/users/search?q=${search}`)
+        .then(r => setSearchResults(r.data))
+        .catch(() => {})
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [search, explore])
 
   const load = useCallback(async (reset = false) => {
     setLoading(true)
@@ -582,6 +602,45 @@ export default function FeedPage({ explore = false }) {
           Refresh
         </button>
       </div>
+
+      {/* Search people (Explore only) */}
+      {explore && (
+        <div className="relative mb-6">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search people..."
+            className="input-field pl-8 text-sm py-2.5 w-full"
+          />
+          {searchResults.length > 0 && (
+            <div className="absolute z-30 mt-1 w-full card p-1 max-h-64 overflow-y-auto">
+              {searchResults.map(u => (
+                <button
+                  key={u.id}
+                  onClick={() => {
+                    setSearch('')
+                    setSearchResults([])
+                    navigate(`/profile/${u.username}`)
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-all text-left"
+                >
+                  <img
+                    src={u.avatar_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${u.username}`}
+                    alt=""
+                    className="w-8 h-8 rounded-full bg-gray-800"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm text-white truncate">{u.display_name}</p>
+                    <p className="text-xs text-gray-500 truncate">@{u.username}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
 
       {/* Stories */}
       {!explore && (

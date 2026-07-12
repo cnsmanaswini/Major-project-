@@ -11,26 +11,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import logging
 
 from config import settings
 from models.database import create_tables
 
 from ai.pipeline.loader import preload_models
 from ai.rag.index import build_rag_index
-
-from routers import (
-    posts,
-    feed,
-    messages,
-    analytics,
-    interactions,
-    agents,
-    users,
-    follow,
-    notifications,
-)
-
-from routers.auth import router as auth_router
+from config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mindgram")
@@ -84,71 +73,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Routers
+app.include_router(auth_router,             prefix="/api/auth",         tags=["Auth"])
+app.include_router(users.router,            prefix="/api/users",        tags=["Users"])
+app.include_router(posts.router,            prefix="/api/posts",        tags=["Posts"])
+app.include_router(feed.router,             prefix="/api/feed",         tags=["Feed"])
+app.include_router(messages.router,         prefix="/api/messages",     tags=["Messages"])
+app.include_router(analytics.router,        prefix="/api/analytics",    tags=["Analytics"])
+app.include_router(interactions.router,     prefix="/api/interactions",  tags=["Interactions"])
+app.include_router(agents.router,           prefix="/api/agents",       tags=["Agents"])
 
-# -------------------- Routers --------------------
-
-app.include_router(
-    auth_router,
-    prefix="/api/auth",
-    tags=["Auth"],
-)
-
-app.include_router(
-    users.router,
-    prefix="/api/users",
-    tags=["Users"],
-)
-
-app.include_router(
-    posts.router,
-    prefix="/api/posts",
-    tags=["Posts"],
-)
-
-app.include_router(
-    feed.router,
-    prefix="/api/feed",
-    tags=["Feed"],
-)
-
-app.include_router(
-    messages.router,
-    prefix="/api/messages",
-    tags=["Messages"],
-)
-
-app.include_router(
-    analytics.router,
-    prefix="/api/analytics",
-    tags=["Analytics"],
-)
-
-app.include_router(
-    interactions.router,
-    prefix="/api/interactions",
-    tags=["Interactions"],
-)
-
-app.include_router(
-    agents.router,
-    prefix="/api/agents",
-    tags=["Agents"],
-)
-
-app.include_router(
-    follow.router,
-    prefix="/api/follow",
-    tags=["Follow"],
-)
-
-app.include_router(
-    notifications.router,
-    prefix="/api/notifications",
-    tags=["Notifications"],
-)
-
-
-# -------------------- Root --------------------
 
 @app.get("/")
 async def root():

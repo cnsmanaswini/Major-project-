@@ -24,16 +24,8 @@ from schemas.schemas import PostOut
 from routers.auth import get_current_user
 
 from ai.pipeline.analyzer import analyze_text
-from ai.agents.orchestrator import (
-    run_agents,
-    EmotionSnapshot,
-)
-
-from services.cloudinary_service import (
-    upload_image,
-    upload_video,
-)
-
+from ai.agents.orchestrator import run_agents, EmotionSnapshot
+from services.cloudinary_service import upload_image, upload_video
 from services.algorithm import update_user_interests
 from services.notification_service import create_notification
 
@@ -109,6 +101,8 @@ async def create_post(
 
     image_url = ""
     video_url = ""
+    image_public_id = ""
+    video_public_id = ""
 
     if image and image.filename:
         result = await upload_image(
@@ -116,6 +110,7 @@ async def create_post(
             folder="mindgram/posts",
         )
         image_url = result["url"]
+        image_public_id = result["public_id"]
 
     if video and video.filename:
         result = await upload_video(
@@ -123,25 +118,22 @@ async def create_post(
             folder="mindgram/reels",
         )
         video_url = result["url"]
+        video_public_id = result["public_id"]
         is_reel = True
 
+    # Run AI pipeline
     text_to_analyze = content or "photo post"
+    risk_history = await get_user_risk_history(current_user.id, db)
+    pipeline = analyze_text(text_to_analyze, risk_history)
 
-    risk_history = await get_user_risk_history(
-        current_user.id,
-        db,
-    )
-
-    pipeline = analyze_text(
-        text_to_analyze,
-        risk_history,
-    )
-
+    # Create post
     post = Post(
         user_id=current_user.id,
         content=content,
         image_url=image_url,
         video_url=video_url,
+        image_public_id=image_public_id,
+        video_public_id=video_public_id,
         is_reel=is_reel,
         location=location,
         sentiment=pipeline.sentiment,
@@ -288,6 +280,14 @@ async def delete_post(
             status_code=403,
             detail="Not your post",
         )
+
+    # Clean up Cloudinary storage before deleting the DB row.
+    # Best-effort: delete_asset() already swallows its own errors,
+    # so a Cloudinary hiccup never blocks the actual post deletion.
+    if post.image_public_id:
+        delete_asset(post.image_public_id, resource_type="image")
+    if post.video_public_id:
+        delete_asset(post.video_public_id, resource_type="video")
 
     await db.delete(post)
 
