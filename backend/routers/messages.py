@@ -1,3 +1,4 @@
+
 """
 Messages Router — Real-time WebSocket chat
 GET  /api/messages/conversations     → list conversations
@@ -10,11 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_
 from typing import Dict, List
-from datetime import datetime
 import json
-
+from services.notification_service import create_notification
 from models.database import get_db
-from models.models import Message, User, EmotionLog, Notification
+from models.models import Message, User, EmotionLog 
 from schemas.schemas import MessageCreate, MessageOut
 from routers.auth import get_current_user
 from ai.pipeline.analyzer import analyze_text
@@ -115,6 +115,13 @@ async def websocket_chat(
 
             await db.commit()
             await db.refresh(msg)
+            await create_notification(
+             db=db,
+             user_id=receiver_id,
+             from_user_id=user_id,
+             notification_type="message",
+             message=f"{sender.username} sent you a message",
+            )
 
             # Build response payload
             payload = {
@@ -185,6 +192,13 @@ async def send_message(
 
     await db.commit()
     await db.refresh(msg)
+    await create_notification(
+     db=db,
+     user_id=body.receiver_id,
+     from_user_id=current_user.id,
+     notification_type="message",
+     message=f"{current_user.username} sent you a message",
+    )
 
     # Notify receiver via WebSocket if online
     await manager.send_to_user(body.receiver_id, {

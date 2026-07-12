@@ -1,0 +1,50 @@
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.database import get_db
+from models.models import User
+from routers.auth import get_current_user
+
+from services.notification_service import (
+    get_notifications,
+    mark_as_read,
+    delete_notification,
+)
+
+router = APIRouter()
+
+
+@router.get("")
+async def all_notifications(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+
+    return await get_notifications(
+        db=db,
+        user_id=current_user.id,
+    )
+
+
+@router.put("/{notification_id}/read")
+async def read_notification(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+
+    return await mark_as_read(
+        db=db,
+        notification_id=notification_id,
+    )
+
+
+@router.delete("/{notification_id}")
+async def remove_notification(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+
+    return await delete_notification(
+        db=db,
+        notification_id=notification_id,
+    )
