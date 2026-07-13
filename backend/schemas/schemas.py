@@ -58,6 +58,7 @@ class PostOut(BaseModel):
     feed_score: float
     likes_count: int
     comments_count: int
+    is_liked: bool = False          # ← ADD THIS LINE
     author: Optional[UserOut] = None
 
     class Config:

@@ -21,9 +21,10 @@ const useFeedApi = () => {
 }
 
 // ── Post Card ─────────────────────────────────────────────────
+// ── Post Card ─────────────────────────────────────────────────
 function PostCard({ post, onLike }) {
   const { user, api } = useAuth()
-  const [liked, setLiked]           = useState(false)
+  const [liked, setLiked]           = useState(post.is_liked || false)
   const [likeCount, setLikeCount]   = useState(post.likes_count || 0)
   const [showComments, setShowComments] = useState(false)
   const [comments, setComments]     = useState([])
@@ -32,12 +33,18 @@ function PostCard({ post, onLike }) {
   const [posting, setPosting]       = useState(false)
 
   const handleLike = async () => {
-    const next = !liked
-    setLiked(next)
-    setLikeCount(c => next ? c + 1 : c - 1)
+    const prevLiked = liked
+    const prevCount = likeCount
+    setLiked(!prevLiked)
+    setLikeCount(c => !prevLiked ? c + 1 : c - 1)
     try {
-      await api.post(`/posts/${post.id}/like`)
-    } catch {}
+      const res = await api.post(`/posts/${post.id}/like`)
+      setLiked(res.data.is_liked)
+      setLikeCount(res.data.likes_count)
+    } catch {
+      setLiked(prevLiked)
+      setLikeCount(prevCount)
+    }
   }
 
   const loadComments = async () => {
