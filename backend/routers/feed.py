@@ -14,7 +14,7 @@ from models.database import get_db
 from models.models import Post, User, Story
 from schemas.schemas import PostOut
 from routers.auth import get_current_user, get_optional_user
-from services.algorithm import build_feed
+from services.algorithm import build_feed, attach_like_status
 from models.models import User as UserModel
 
 router = APIRouter()
@@ -37,7 +37,15 @@ async def get_feed(
         limit=limit,
         offset=offset,
     )
+    posts = await build_feed(
+        user_id=current_user.id,
+        db=db,
+        limit=limit,
+        offset=offset,
+    )
+    await attach_like_status(posts, current_user.id, db)   # ← ADD
     return posts
+    
 
 
 @router.get("/explore", response_model=list[PostOut])
@@ -62,8 +70,14 @@ async def get_explore(
     # Load authors
     for p in posts:
         p.author = await db.get(User, p.user_id)
+    for p in posts:
+        p.author = await db.get(User, p.user_id)
+
+    if current_user:                                        # ← ADD
+        await attach_like_status(posts, current_user.id, db) # ← ADD
 
     return posts
+    
 
 
 @router.get("/reels", response_model=list[PostOut])
@@ -86,6 +100,11 @@ async def get_reels(
     posts = result.scalars().all()
     for p in posts:
         p.author = await db.get(User, p.user_id)
+    posts = result.scalars().all()
+    for p in posts:
+        p.author = await db.get(User, p.user_id)
+    if current_user:                                          # ← ADD
+        await attach_like_status(posts, current_user.id, db)   # ← ADD
     return posts
 
 

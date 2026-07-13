@@ -17,12 +17,12 @@ from models.models import (
     Post, User, EmotionLog, AgentDecision,
     Like, Notification
 )
-from schemas.schemas import PostOut
-from routers.auth import get_current_user
+from schemas.schemas import PostOut, UserOut
+from routers.auth import get_current_user, get_optional_user
+from services.algorithm import attach_like_status, update_user_interests
 from ai.pipeline.analyzer import analyze_text
 from ai.agents.orchestrator import run_agents, EmotionSnapshot
 from services.cloudinary_service import upload_image, upload_video, delete_asset
-from services.algorithm import update_user_interests
 
 router = APIRouter()
 
@@ -164,13 +164,17 @@ async def create_post(
 @router.get("/{post_id}", response_model=PostOut)
 async def get_post(
     post_id: int,
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     post = await db.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     post.author = await db.get(User, post.user_id)
+    if current_user:
+        await attach_like_status([post], current_user.id, db)
     return post
+    
 
 
 @router.delete("/{post_id}")
@@ -245,15 +249,39 @@ async def toggle_like(
     await db.commit()
     return {
         "status": action,
+        "is_liked": action == "liked",
         "likes_count": post.likes_count,
     }
+    
 
+@router.get("/{post_id}/likes", response_model=list[UserOut])
+async def get_post_likers(
+    post_id: int,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    """List of users who liked this post, most recent first."""
+    post = await db.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    result = await db.execute(
+        select(User)
+        .join(Like, Like.user_id == User.id)
+        .where(Like.post_id == post_id)
+        .order_by(Like.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return result.scalars().all()
 
 @router.get("/user/{user_id}", response_model=list[PostOut])
 async def get_user_posts(
     user_id: int,
     limit: int = 20,
     offset: int = 0,
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -267,4 +295,6 @@ async def get_user_posts(
     user = await db.get(User, user_id)
     for p in posts:
         p.author = user
+    if current_user:
+        await attach_like_status(posts, current_user.id, db)
     return posts

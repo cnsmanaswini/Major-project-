@@ -28,6 +28,23 @@ from models.models import (
 RECENCY_HALF_LIFE_HOURS = 48.0
 RISK_SUPPRESSION_THRESHOLD = 0.60
 
+async def attach_like_status(posts, user_id: int, db: AsyncSession):
+    """Mutates posts in-place, setting `is_liked` based on whether
+    `user_id` has a Like row for each post. One query for the whole batch."""
+    if not posts:
+        return posts
+    post_ids = [p.id for p in posts]
+    result = await db.execute(
+        select(Like.post_id).where(
+            Like.post_id.in_(post_ids),
+            Like.user_id == user_id,
+        )
+    )
+    liked_ids = {row[0] for row in result.all()}
+    for p in posts:
+        p.is_liked = p.id in liked_ids
+    return posts
+    
 WEIGHTS = {
     "interest":     0.30,
     "relationship": 0.25,
