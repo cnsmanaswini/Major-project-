@@ -3,7 +3,7 @@ Pydantic schemas for MindGram API
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 
 
@@ -39,6 +39,19 @@ class PostCreate(BaseModel):
     is_reel: bool = False
 
 
+class PostMediaOut(BaseModel):
+    id: int
+    post_id: int
+    media_type: str
+    url: str
+    public_id: str = ""
+    position: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class PostOut(BaseModel):
     id: int
     user_id: int
@@ -56,9 +69,11 @@ class PostOut(BaseModel):
     sarcasm_score: float
     risk_score: float
     feed_score: float
+    topics: List[str] = Field(default_factory=list)
     likes_count: int
     comments_count: int
-    is_liked: bool = False          # ← ADD THIS LINE
+    media: List[PostMediaOut] = Field(default_factory=list)
+    is_liked: bool = False
     author: Optional[UserOut] = None
 
     class Config:
@@ -113,7 +128,7 @@ class MessageOut(BaseModel):
 class InteractionCreate(BaseModel):
     user_id: int
     post_id: int
-    action: str  # like | unlike | comment | share
+    action: Literal["like", "unlike", "not_interested", "share"] = "like"
 
 
 # ── Analytics ───────────────────────────────────────────────
@@ -158,5 +173,22 @@ class PipelineResult(BaseModel):
     emotion_score: float
     sarcasm: bool
     sarcasm_score: float
+    # Dissociation / emotional-numbness signal (rule-based, independent of
+    # the emotion classifier — see detect_numbness_signal() in pipeline.py).
+    numbness: bool = False
+    numbness_score: float = 0.0
     risk_score: float
     feed_score: float
+
+
+class ReportCreate(BaseModel):
+    user_id: int
+    post_id: int
+    reason: Literal["spam", "harassment", "self_harm", "other"] = "other"
+    details: Optional[str] = None
+
+
+class ImpressionCreate(BaseModel):
+    user_id: int
+    post_id: int
+    dwell_ms: int
