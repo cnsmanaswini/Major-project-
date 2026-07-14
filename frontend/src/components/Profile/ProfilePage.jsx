@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { useParams } from 'react-router-dom'
-import { useParams , useNavigate} from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { Grid, List, Settings, Camera, UserPlus, UserMinus, MessageCircle, LogOut } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 import { useAuth } from '../../context/AuthContext.jsx'
 import { EmotionBadge, SentimentBar, RiskBadge } from '../Common/Badges.jsx'
+import MediaCarousel from '../Common/MediaCarousel.jsx'
+import { getPostMedia, getPostThumbnail } from '../../utils/postMedia.js'
 
 export default function ProfilePage() {
   const { username }            = useParams()
@@ -47,24 +48,36 @@ export default function ProfilePage() {
     if (!target) return
 
     setLoading(true)
-    Promise.all([
-      isOwn
-        ? api.get('/users/me')
-        : api.get(`/users/${target}`),
-      api.get(`/posts/user/${isOwn ? user?.id : 0}`).catch(() => ({ data: [] })),
-      isOwn ? api.get(`/analytics/${user?.id}`).catch(() => ({ data: null })) : Promise.resolve({ data: null }),
-      isOwn ? api.get(`/agents/status/${user?.id}`).catch(() => ({ data: null })) : Promise.resolve({ data: null }),
-    ]).then(([profileRes, postsRes, analyticsRes, agentRes]) => {
-      setProfile(profileRes.data)
-      setPosts(postsRes.data || [])
-      setAnalytics(analyticsRes.data)
-      setAgentStatus(agentRes.data)
-      setEditForm({
-        display_name: profileRes.data.display_name || '',
-        bio: profileRes.data.bio || '',
-        username: profileRes.data.username || '',
-      })
-    }).finally(() => setLoading(false))
+
+    // Profile must be fetched FIRST — the posts/analytics/agent-status calls
+    // all need the resolved profile.id (for other users' profiles, we don't
+    // know their id until this resolves; user?.id only works for isOwn).
+    ;(async () => {
+      try {
+        const profileRes = await (isOwn ? api.get('/users/me') : api.get(`/users/${target}`))
+        const profileData = profileRes.data
+        setProfile(profileData)
+        setEditForm({
+          display_name: profileData.display_name || '',
+          bio: profileData.bio || '',
+          username: profileData.username || '',
+        })
+
+        const targetId = profileData.id
+
+        const [postsRes, analyticsRes, agentRes] = await Promise.all([
+          api.get(`/posts/user/${targetId}`).catch(() => ({ data: [] })),
+          isOwn ? api.get(`/analytics/${targetId}`).catch(() => ({ data: null })) : Promise.resolve({ data: null }),
+          isOwn ? api.get(`/agents/status/${targetId}`).catch(() => ({ data: null })) : Promise.resolve({ data: null }),
+        ])
+
+        setPosts(postsRes.data || [])
+        setAnalytics(analyticsRes.data)
+        setAgentStatus(agentRes.data)
+      } finally {
+        setLoading(false)
+      }
+    })()
   }, [username, user])
 
   const handleFollow = async () => {
@@ -330,44 +343,43 @@ export default function ProfilePage() {
       {viewMode === 'grid' ? (
         <>
           <div className="grid grid-cols-3 gap-1">
-            {posts.map(post => (
-              <button
-                key={post.id}
-                onClick={() => setSelected(post)}
-                className="relative aspect-square overflow-hidden rounded-lg bg-white/5 group"
-              >
-                {post.image_url ? (
-                  <img
-                    src={post.image_url}
-                    alt=""
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    loading="lazy"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center p-2 bg-white/3">
-                    <p className="text-[10px] text-gray-400 text-center line-clamp-4 leading-relaxed">
-                      {post.content}
-                    </p>
+            {posts.map(post => {
+              const media = getPostMedia(post)
+              const thumb = media[0]
+              return (
+                <button
+                  key={post.id}
+                  onClick={() => setSelected(post)}
+                  className="relative aspect-square overflow-hidden rounded-lg bg-white/5 group"
+                >
+                  {thumb ? (
+                    <MediaCarousel media={media} variant="thumbnail" className="group-hover:scale-105 transition-transform duration-300" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center p-2 bg-white/3">
+                      <p className="text-[10px] text-gray-400 text-center line-clamp-4 leading-relaxed">
+                        {post.content}
+                      </p>
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100
+                                  transition-opacity flex items-center justify-center gap-3">
+                    <span className="flex items-center gap-1 text-white text-xs font-medium">
+                      ❤️ {post.likes_count}
+                    </span>
+                    <span className="flex items-center gap-1 text-white text-xs font-medium">
+                      💬 {post.comments_count}
+                    </span>
                   </div>
-                )}
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100
-                                transition-opacity flex items-center justify-center gap-3">
-                  <span className="flex items-center gap-1 text-white text-xs font-medium">
-                    ❤️ {post.likes_count}
-                  </span>
-                  <span className="flex items-center gap-1 text-white text-xs font-medium">
-                    💬 {post.comments_count}
-                  </span>
-                </div>
-                {/* Risk dot */}
-                <div className={clsx(
-                  'absolute top-1 right-1 w-2 h-2 rounded-full',
-                  post.risk_score > 0.5 ? 'bg-red-400'
-                  : post.risk_score > 0.3 ? 'bg-yellow-400'
-                  : 'bg-green-400'
-                )} />
-              </button>
-            ))}
+                  {/* Risk dot */}
+                  <div className={clsx(
+                    'absolute top-1 right-1 w-2 h-2 rounded-full',
+                    post.risk_score > 0.5 ? 'bg-red-400'
+                    : post.risk_score > 0.3 ? 'bg-yellow-400'
+                    : 'bg-green-400'
+                  )} />
+                </button>
+              )
+            })}
           </div>
 
           {posts.length === 0 && (
@@ -378,32 +390,33 @@ export default function ProfilePage() {
         </>
       ) : (
         <div className="space-y-3">
-          {posts.map(post => (
-            <div key={post.id} className="card p-4 flex gap-4">
-              {post.image_url && (
-                <img
-                  src={post.image_url}
-                  alt=""
-                  className="w-16 h-16 rounded-xl object-cover flex-shrink-0"
-                />
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-200 leading-relaxed line-clamp-2 mb-2">
-                  {post.content}
-                </p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <EmotionBadge emotion={post.emotion} size="sm" />
-                  {post.sarcasm && (
-                    <span className="text-[10px] text-purple-300">🎭 sarcasm</span>
-                  )}
-                  <span className="ml-auto flex items-center gap-2 text-xs text-gray-500">
-                    <span>❤️ {post.likes_count}</span>
-                    <span>💬 {post.comments_count}</span>
-                  </span>
+          {posts.map(post => {
+            const thumb = getPostThumbnail(post)
+            return (
+              <div key={post.id} className="card p-4 flex gap-4">
+                {thumb && (
+                  <div className="w-16 h-16 rounded-xl overflow-hidden flex-shrink-0">
+                    <MediaCarousel media={[thumb]} variant="thumbnail" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-200 leading-relaxed line-clamp-2 mb-2">
+                    {post.content}
+                  </p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <EmotionBadge emotion={post.emotion} size="sm" />
+                    {post.sarcasm && (
+                      <span className="text-[10px] text-purple-300">🎭 sarcasm</span>
+                    )}
+                    <span className="ml-auto flex items-center gap-2 text-xs text-gray-500">
+                      <span>❤️ {post.likes_count}</span>
+                      <span>💬 {post.comments_count}</span>
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -426,12 +439,8 @@ export default function ProfilePage() {
                 </span>
               )}
             </div>
-            {selected.image_url && (
-              <img
-                src={selected.image_url}
-                alt=""
-                className="w-full rounded-xl object-cover max-h-48"
-              />
+            {getPostMedia(selected).length > 0 && (
+              <MediaCarousel media={getPostMedia(selected)} className="max-h-64" />
             )}
             <p className="text-sm text-gray-200 leading-relaxed">{selected.content}</p>
             <div className="space-y-2 pt-2 border-t border-white/10">

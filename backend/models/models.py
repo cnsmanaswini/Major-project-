@@ -78,6 +78,7 @@ class Post(Base):
     sarcasm_score    = Column(Float, default=0.0)
     risk_score       = Column(Float, default=0.0)
     feed_score       = Column(Float, default=0.5)
+    topics           = Column(JSON, default=list)   # hashtags + soft tags for trending
 
     # Engagement
     likes_count    = Column(Integer, default=0)
@@ -87,8 +88,22 @@ class Post(Base):
 
     # Relationships
     author    = relationship("User", back_populates="posts")
+    media     = relationship("PostMedia", back_populates="post", cascade="all, delete-orphan", order_by="PostMedia.position")
     comments  = relationship("Comment", back_populates="post", cascade="all, delete")
     likes     = relationship("Like", back_populates="post", cascade="all, delete")
+
+
+class PostMedia(Base):
+    __tablename__ = "post_media"
+    id          = Column(Integer, primary_key=True, index=True)
+    post_id     = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    media_type  = Column(String(20), nullable=False)  # image | video
+    url         = Column(String(500), nullable=False)
+    public_id   = Column(String(255), default="")
+    position    = Column(Integer, default=0)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    post = relationship("Post", back_populates="media")
 
 
 class Story(Base):
@@ -202,3 +217,46 @@ class UserInterest(Base):
     emotion    = Column(String(30))   # what emotions they engage with
     score      = Column(Float, default=0.0)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Report(Base):
+    """User-submitted reports on posts — feeds moderation queue and,
+    for self-harm reports, the author's risk pipeline."""
+    __tablename__ = "reports"
+    id          = Column(Integer, primary_key=True, index=True)
+    post_id     = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    reporter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    reason      = Column(String(50), default="other")   # spam, harassment, self_harm, other
+    details     = Column(Text, default="")
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    reviewed    = Column(Boolean, default=False)
+
+    post     = relationship("Post")
+    reporter = relationship("User")
+
+
+class ImpressionLog(Base):
+    """Dwell-time based impression tracking — powers skip-rate inference.
+    `skipped` is derived server-side from dwell_ms, not client-trusted."""
+    __tablename__ = "impression_logs"
+    id            = Column(Integer, primary_key=True, index=True)
+    user_id       = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    post_id       = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    emotion       = Column(String(30))
+    dwell_ms      = Column(Integer, default=0)
+    skipped       = Column(Boolean, default=False)
+    created_at    = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class NotInterested(Base):
+    """Explicit negative feedback — hides post and suppresses author in feed."""
+    __tablename__ = "not_interested"
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    post_id    = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    author_id  = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    post   = relationship("Post")
+    user   = relationship("User", foreign_keys=[user_id])
+    author = relationship("User", foreign_keys=[author_id])

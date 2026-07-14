@@ -8,13 +8,14 @@ GET /api/feed/reels    → reels feed
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
 
 from models.database import get_db
 from models.models import Post, User, Story
 from schemas.schemas import PostOut
 from routers.auth import get_current_user, get_optional_user
-from services.algorithm import build_feed
+from services.algorithm import build_feed, get_trending_topics
 from models.models import User as UserModel
 
 router = APIRouter()
@@ -40,6 +41,15 @@ async def get_feed(
     return posts
 
 
+@router.get("/trending")
+async def get_trending(
+    limit: int = Query(default=10, le=20),
+    db: AsyncSession = Depends(get_db),
+):
+    """Top trending topics based on recent engagement velocity."""
+    return await get_trending_topics(db, limit=limit)
+
+
 @router.get("/explore", response_model=list[PostOut])
 async def get_explore(
     limit: int = Query(default=30, le=50),
@@ -53,6 +63,7 @@ async def get_explore(
     cutoff = datetime.utcnow() - timedelta(days=14)
     result = await db.execute(
         select(Post)
+        .options(selectinload(Post.media))
         .where(Post.created_at >= cutoff)
         .order_by(Post.feed_score.desc(), Post.likes_count.desc())
         .limit(limit)
@@ -76,6 +87,7 @@ async def get_reels(
     cutoff = datetime.utcnow() - timedelta(days=30)
     result = await db.execute(
         select(Post)
+        .options(selectinload(Post.media))
         .where(
             Post.is_reel == True,
             Post.created_at >= cutoff,
