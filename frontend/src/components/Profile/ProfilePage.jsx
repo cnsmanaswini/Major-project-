@@ -22,9 +22,13 @@ export default function ProfilePage() {
   const [editing, setEditing]   = useState(false)
   const [editForm, setEditForm] = useState({ display_name: '', bio: '', username: '' })
   const [usernameError, setUsernameError] = useState('')
-  const [listModal, setListModal] = useState(null)   // 'followers' | 'following' | null
+  const [listModal, setListModal] = useState(null)   // 'followers' | 'following' | 'likes' | null
   const [listUsers, setListUsers] = useState([])
   const [listLoading, setListLoading] = useState(false)
+  const [postComments, setPostComments] = useState([])
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [newComment, setNewComment] = useState('')
+  const [postingComment, setPostingComment] = useState(false)
 
   const openList = async (type) => {
     if (!profile) return
@@ -39,6 +43,57 @@ export default function ProfilePage() {
       setListLoading(false)
     }
   }
+
+  const openLikers = async (post) => {
+    setListModal('likes')
+    setListLoading(true)
+    try {
+      const res = await api.get(`/posts/${post.id}/likes`)
+      setListUsers(res.data || [])
+    } catch {
+      setListUsers([])
+    } finally {
+      setListLoading(false)
+    }
+  }
+
+  const loadPostComments = async (postId) => {
+    setCommentsLoading(true)
+    try {
+      const res = await api.get(`/interactions/comments/${postId}`)
+      setPostComments(res.data || [])
+    } catch {
+      setPostComments([])
+    } finally {
+      setCommentsLoading(false)
+    }
+  }
+
+  const handleAddComment = async () => {
+    if (!newComment.trim() || !selected) return
+    setPostingComment(true)
+    try {
+      const res = await api.post('/interactions/comment', {
+        post_id: selected.id,
+        user_id: user.id,
+        content: newComment.trim(),
+      })
+      setPostComments(c => [...c, res.data])
+      setNewComment('')
+    } catch {
+    } finally {
+      setPostingComment(false)
+    }
+  }
+
+  useEffect(() => {
+    if (selected) {
+      loadPostComments(selected.id)
+    } else {
+      setPostComments([])
+      setNewComment('')
+    }
+  }, [selected])
   const fileRef = useRef()
 
   const isOwn = !username || username === user?.username
@@ -428,7 +483,7 @@ export default function ProfilePage() {
           onClick={() => setSelected(null)}
         >
           <div
-            className="card max-w-md w-full p-5 space-y-4 animate-slide-up"
+            className="card max-w-md w-full p-5 space-y-4 animate-slide-up max-h-[85vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -443,6 +498,19 @@ export default function ProfilePage() {
               <MediaCarousel media={getPostMedia(selected)} className="max-h-64" />
             )}
             <p className="text-sm text-gray-200 leading-relaxed">{selected.content}</p>
+
+            <div className="flex items-center gap-4 pt-2 border-t border-white/10 text-xs">
+              <button
+                onClick={() => openLikers(selected)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <span className="text-white font-semibold">{selected.likes_count || 0}</span> likes
+              </button>
+              <span className="text-gray-400">
+                <span className="text-white font-semibold">{selected.comments_count || 0}</span> comments
+              </span>
+            </div>
+
             <div className="space-y-2 pt-2 border-t border-white/10">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-gray-500">Sentiment</span>
@@ -468,6 +536,54 @@ export default function ProfilePage() {
                 </span>
               </div>
             </div>
+
+            <div className="pt-2 border-t border-white/10 space-y-3 max-h-48 overflow-y-auto">
+              {commentsLoading ? (
+                <div className="flex items-center justify-center py-4">
+                  <div className="w-5 h-5 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+                </div>
+              ) : postComments.length === 0 ? (
+                <p className="text-gray-500 text-xs text-center py-3">No comments yet</p>
+              ) : (
+                postComments.map(c => (
+                  <div key={c.id} className="flex items-start gap-2">
+                    <img
+                      src={c.user?.avatar_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${c.user_id}`}
+                      alt=""
+                      className="w-7 h-7 rounded-full bg-gray-800 flex-shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-200">
+                        <span className="text-white font-medium">{c.user?.username || `user_${c.user_id}`}</span>{' '}
+                        {c.content}
+                      </p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+              <input
+                value={newComment}
+                onChange={e => setNewComment(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleAddComment()}
+                placeholder="Add a comment..."
+                className="flex-1 bg-white/5 rounded-lg px-3 py-2 text-xs text-white placeholder-gray-500
+                           outline-none focus:ring-1 focus:ring-brand-500/50"
+              />
+              <button
+                onClick={handleAddComment}
+                disabled={!newComment.trim() || postingComment}
+                className="btn-primary text-xs py-2 px-3 disabled:opacity-40"
+              >
+                Post
+              </button>
+            </div>
+
             <button
               onClick={() => setSelected(null)}
               className="btn-ghost w-full text-sm"

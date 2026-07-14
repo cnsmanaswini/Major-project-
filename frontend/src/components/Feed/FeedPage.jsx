@@ -97,12 +97,18 @@ function PostCard({ post, onLike, onHide, trackImpressions = true }) {
   const media = getPostMedia(post)
 
   const handleLike = async () => {
-    const next = !liked
-    setLiked(next)
-    setLikeCount(c => next ? c + 1 : c - 1)
+    const prevLiked = liked
+    const prevCount = likeCount
+    setLiked(!prevLiked)
+    setLikeCount(c => !prevLiked ? c + 1 : c - 1)
     try {
-      await api.post(`/posts/${post.id}/like`)
-    } catch {}
+      const res = await api.post(`/posts/${post.id}/like`)
+      setLiked(res.data.is_liked)
+      setLikeCount(res.data.likes_count)
+    } catch {
+      setLiked(prevLiked)
+      setLikeCount(prevCount)
+    }
   }
 
   const loadComments = async () => {
