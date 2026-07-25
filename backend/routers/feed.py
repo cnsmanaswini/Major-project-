@@ -38,9 +38,7 @@ async def get_feed(
         limit=limit,
         offset=offset,
     )
-
     await attach_like_status(posts, current_user.id, db)
-
     return posts
 
 
@@ -81,6 +79,7 @@ async def get_explore(
 
     posts = result.scalars().all()
 
+    # Load authors
     for p in posts:
         p.author = await db.get(User, p.user_id)
 
@@ -118,10 +117,8 @@ async def get_reels(
 
     for p in posts:
         p.author = await db.get(User, p.user_id)
-
     if current_user:
         await attach_like_status(posts, current_user.id, db)
-
     return posts
 
 

@@ -2,20 +2,26 @@
 Interactions Router — likes, comments, shares, negative feedback
 """
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from models.database import get_db
-from models.models import Post, Like, Comment, User, Report, AgentDecision, NotInterested
+from models.models import Post, Like, Comment, User, Report, AgentDecision, NotInterested, EmotionLog
 from schemas.schemas import (
     InteractionCreate, CommentCreate, CommentOut,
     ReportCreate, ImpressionCreate,
 )
 from ai.pipeline.analyzer import analyze_text
-from services.algorithm import update_user_interests, record_impression
+from ai.agents.orchestrator import run_agents, EmotionSnapshot
+from services.algorithm import (
+    update_user_interests, record_impression, log_like_behavioral_signal,
+)
+from routers.posts import get_user_risk_history, get_emotion_history
 
 router = APIRouter()
+logger = logging.getLogger("mindgram.interactions")
 
 
 @router.post("")
@@ -30,6 +36,7 @@ async def record_interaction(body: InteractionCreate, db: AsyncSession = Depends
         post.likes_count += 1
         await db.commit()                                        # commit like first
         await update_user_interests(body.user_id, post.emotion, db, weight=0.3)
+        await log_like_behavioral_signal(body.user_id, post, db)
         return {"status": "ok", "action": body.action, "post_id": body.post_id}
 
     elif body.action == "unlike":
@@ -66,24 +73,80 @@ async def record_interaction(body: InteractionCreate, db: AsyncSession = Depends
 
 @router.post("/comment", response_model=CommentOut, status_code=201)
 async def add_comment(body: CommentCreate, db: AsyncSession = Depends(get_db)):
+    """
+    Comments now run through the same silent AI pipeline as posts:
+    sentiment/emotion/sarcasm/numbness -> LSTM-refined risk -> feed_score,
+    logged to EmotionLog(source="comment") and evaluated by the agent
+    orchestrator, same as post creation in routers/posts.py.
+
+    A comment gets its own risk history (the commenter's, not the post
+    author's) since the pipeline tracks the commenter's mental-health
+    trajectory, not the post they happen to be commenting on.
+    """
     post = await db.get(Post, body.post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    pipeline = analyze_text(body.content)
+    risk_history = await get_user_risk_history(body.user_id, db)
+    pipeline = analyze_text(body.content, risk_history)
+
     comment = Comment(
         post_id=body.post_id,
         user_id=body.user_id,
         content=body.content,
         sentiment=pipeline.sentiment,
+        sentiment_score=pipeline.sentiment_score,
+        emotion=pipeline.emotion,
+        emotion_score=pipeline.emotion_score,
+        sarcasm=pipeline.sarcasm,
+        sarcasm_score=pipeline.sarcasm_score,
+        risk_score=pipeline.risk_score,
+        feed_score=pipeline.feed_score,
     )
     db.add(comment)
     post.comments_count += 1
+
+    # Log emotion for the commenter (not the post author)
+    log = EmotionLog(
+        user_id=body.user_id,
+        sentiment_score=pipeline.sentiment_score,
+        emotion=pipeline.emotion,
+        emotion_score=pipeline.emotion_score,
+        risk_score=pipeline.risk_score,
+        source="comment",
+    )
+    db.add(log)
+
+    # Run agentic pipeline on the commenter's trajectory
+    history = await get_emotion_history(body.user_id, db)
+    current_snap = EmotionSnapshot(
+        sentiment_score=pipeline.sentiment_score,
+        emotion=pipeline.emotion,
+        emotion_score=pipeline.emotion_score,
+        risk_score=pipeline.risk_score,
+        source="comment",
+    )
+    agent_report = run_agents(current_snap, history)
+
+    db.add(AgentDecision(
+        user_id=body.user_id,
+        risk_level=agent_report.risk_level,
+        decision=agent_report.decision,
+        intervention=agent_report.intervention,
+        rag_suggestion=agent_report.rag_suggestion,
+        metadata_json=agent_report.metadata,
+    ))
+    log.agent_action = agent_report.decision
+
     await db.commit()
     await db.refresh(comment)
     comment.user = await db.get(User, body.user_id)
 
-    await update_user_interests(body.user_id, post.emotion, db, weight=0.15)  # comments = weaker signal than likes
+    # Interest signal uses the COMMENT's own emotion, not the post's —
+    # what the commenter expressed is the better signal for what content
+    # they're drawn to write about, and matches the like-endpoint's use
+    # of the post's own emotion for the same reasoning.
+    await update_user_interests(body.user_id, pipeline.emotion, db, weight=0.15)
 
     return comment
 

@@ -20,7 +20,9 @@ from models.models import (
 )
 from schemas.schemas import PostOut, UserOut
 from routers.auth import get_current_user, get_optional_user
-from services.algorithm import attach_like_status, update_user_interests
+from services.algorithm import (
+    attach_like_status, update_user_interests, log_like_behavioral_signal,
+)
 from services.topic_utils import extract_topics
 from ai.pipeline.analyzer import analyze_text
 from ai.agents.orchestrator import run_agents, EmotionSnapshot
@@ -122,8 +124,33 @@ async def create_post(
         if first_video
         else "photo post"
     )
+
+    # NOTE: text_to_analyze is a placeholder ("shared a photo") when there's
+    # no real caption -- it exists only so the sentiment/emotion classifiers
+    # have *something* to run on. It must NOT be used to decide whether the
+    # caption is "empty" (that placeholder has plenty of characters), and it
+    # was previously the only text passed to analyze_text, meaning:
+    #   1. media_source was never passed in at all, so blend_media_signal
+    #      always took its "no media" early-return branch -- image/video
+    #      analysis never influenced sentiment/risk/emotion.
+    #   2. even once media_source is wired in, the empty-caption bypass
+    #      inside the pipeline needs to see the REAL caption (`content`),
+    #      not the placeholder, or a captionless photo post would let the
+    #      placeholder's classifier output vote against the image's actual
+    #      emotion read.
+    media_url_for_analysis = (
+        first_image["url"] if first_image
+        else first_video["url"] if first_video
+        else None
+    )
+
     risk_history = await get_user_risk_history(current_user.id, db)
-    pipeline = analyze_text(text_to_analyze, risk_history)
+    pipeline = analyze_text(
+        text_to_analyze,
+        risk_history,
+        media_source=media_url_for_analysis,
+        original_content=content,
+    )
 
     # Create post
     post = Post(
@@ -309,6 +336,15 @@ async def toggle_like(
             ))
 
     await db.commit()
+
+    if action == "liked":
+        # Behavioral signal: liking is content-less, so this logs the
+        # LIKED POST's existing emotion/risk into the LIKER's own risk
+        # trajectory rather than re-running analyze_text (nothing to
+        # analyze). Runs after the like is committed so it never blocks
+        # the like itself. See services/algorithm.py for details.
+        await log_like_behavioral_signal(current_user.id, post, db)
+
     return {
         "status": action,
         "is_liked": action == "liked",

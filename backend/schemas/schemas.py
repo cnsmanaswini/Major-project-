@@ -192,3 +192,71 @@ class ImpressionCreate(BaseModel):
     user_id: int
     post_id: int
     dwell_ms: int
+
+
+# ── PASTE INTO schemas/schemas.py ──────────────────────────────
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+
+class StoryCreate(BaseModel):
+    user_id: int
+    image_url: Optional[str] = ""
+    video_url: Optional[str] = ""
+    text: Optional[str] = ""
+
+
+class StoryAuthorOut(BaseModel):
+    id: int
+    username: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class StoryOut(BaseModel):
+    id: int
+    user_id: int
+    image_url: str
+    video_url: str
+    text: str
+    created_at: datetime
+    expires_at: Optional[datetime]
+    views: int
+    sentiment: str
+    risk_score: float
+    author: Optional[StoryAuthorOut] = None
+    viewed_by_me: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class StoryViewCreate(BaseModel):
+    viewer_id: int
+
+
+class StoryViewerOut(BaseModel):
+    """One entry in the 'who viewed my story' list."""
+    viewer_id: int
+    username: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    viewed_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ViewedStoryOut(BaseModel):
+    """One entry in 'stories I have viewed' (personal history)."""
+    story_id: int
+    author_id: int
+    author_username: str
+    viewed_at: datetime
+
+    class Config:
+        from_attributes = True
