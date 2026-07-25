@@ -3,16 +3,18 @@ import { useNavigate } from 'react-router-dom'
 import { Heart, MessageCircle, Share2, Bookmark, Send, Image, Video, RefreshCw, MapPin, Search, X, Layers, MoreHorizontal, Flag, EyeOff } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
-import { useAuth } from '../../context/AuthContext.jsx'
+import { useAuth } from '../../context/AuthContext'
 import { EmotionBadge, RiskBadge, SentimentBar, InterventionBanner } from '../Common/Badges.jsx'
 import MediaCarousel from '../Common/MediaCarousel.jsx'
+import StoryUploader from '../StoryUploader.jsx'
+import StoryRing from '../StoryRing.jsx'
+import StoryViewer from '../StoryViewersModal.jsx'
 
 // ── API calls ─────────────────────────────────────────────────
 const useFeedApi = () => {
   const { api } = useAuth()
   return {
     getFeed:        (explore) => api.get(explore ? '/feed/explore' : '/feed'),
-    getStories:     ()        => api.get('/feed/stories'),
     createPost:     (data)    => api.post('/posts', data),
     likePost:       (id)      => api.post(`/posts/${id}/like`),
     getComments:    (id)      => api.get(`/interactions/comments/${id}`),
@@ -438,41 +440,6 @@ function PostCard({ post, onLike, onHide, trackImpressions = true }) {
   )
 }
 
-// ── Stories Bar ───────────────────────────────────────────────
-function StoriesBar({ stories, onAddStory }) {
-  return (
-    <div className="flex gap-4 overflow-x-auto pb-1 mb-4 scrollbar-hide">
-      {/* Add story */}
-      <button
-        onClick={onAddStory}
-        className="flex flex-col items-center gap-1.5 flex-shrink-0"
-      >
-        <div className="w-14 h-14 rounded-full border-2 border-dashed border-brand-500/50
-                        flex items-center justify-center bg-brand-500/10">
-          <span className="text-xl text-brand-400">+</span>
-        </div>
-        <span className="text-[10px] text-gray-400">Your story</span>
-      </button>
-
-      {/* Other stories */}
-      {stories.map(s => (
-        <button key={s.user.id} className="flex flex-col items-center gap-1.5 flex-shrink-0">
-          <div className="story-ring">
-            <img
-              src={s.user.avatar_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${s.user.username}`}
-              alt=""
-              className="w-12 h-12 rounded-full bg-gray-800"
-            />
-          </div>
-          <span className="text-[10px] text-gray-400 max-w-12 truncate">
-            {s.user.display_name}
-          </span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
 // ── Compose Post ──────────────────────────────────────────────
 const MAX_IMAGE_MB = 10
 const MAX_VIDEO_MB = 100
@@ -749,7 +716,6 @@ export default function FeedPage({ explore = false }) {
   const { api, user }   = useAuth()
   const navigate         = useNavigate()
   const [posts, setPosts]           = useState([])
-  const [stories, setStories]       = useState([])
   const [agentStatus, setAgentStatus] = useState(null)
   const [loading, setLoading]       = useState(true)
   const [page, setPage]             = useState(0)
@@ -757,6 +723,10 @@ export default function FeedPage({ explore = false }) {
   const [search, setSearch]               = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [trendingTopics, setTrendingTopics] = useState([])
+  const [followingIds, setFollowingIds] = useState([])
+  const [showStoryUploader, setShowStoryUploader] = useState(false)
+  const [viewingUserId, setViewingUserId] = useState(null)
+  const [storyRingKey, setStoryRingKey] = useState(0)
 
   // Search users (Explore page only)
   useEffect(() => {
@@ -769,19 +739,27 @@ export default function FeedPage({ explore = false }) {
     return () => clearTimeout(timer)
   }, [search, explore])
 
+  useEffect(() => {
+    if (!user?.id || explore) {
+      setFollowingIds([])
+      return
+    }
+    api.get(`/users/${user.id}/following`)
+      .then(r => setFollowingIds((r.data || []).map(u => u.id)))
+      .catch(() => setFollowingIds([]))
+  }, [user?.id, explore, api])
+
   const load = useCallback(async (reset = false) => {
     setLoading(true)
     try {
       const offset = reset ? 0 : page * 20
-      const [feedRes, storiesRes, agentRes, trendingRes] = await Promise.all([
+      const [feedRes, agentRes, trendingRes] = await Promise.all([
         api.get(explore ? '/feed/explore' : `/feed?limit=20&offset=${offset}`),
-        api.get('/feed/stories').catch(() => ({ data: [] })),
         api.get(`/agents/status/${user?.id}`).catch(() => ({ data: null })),
         api.get('/feed/trending').catch(() => ({ data: [] })),
       ])
       const newPosts = feedRes.data || []
       setPosts(prev => reset ? newPosts : [...prev, ...newPosts])
-      setStories(storiesRes.data || [])
       setAgentStatus(agentRes.data)
       setTrendingTopics(trendingRes.data || [])
       setHasMore(newPosts.length === 20)
@@ -861,8 +839,37 @@ export default function FeedPage({ explore = false }) {
 
 
       {/* Stories */}
-      {!explore && (
-        <StoriesBar stories={stories} onAddStory={() => {}} />
+      {!explore && user && (
+        <div className="mb-4">
+          <StoryRing
+            currentUserId={user.id}
+            currentUser={user}
+            followingIds={followingIds}
+            refreshKey={storyRingKey}
+            onOpenUploader={() => setShowStoryUploader(true)}
+            onOpenViewer={(userId) => setViewingUserId(userId)}
+          />
+        </div>
+      )}
+
+      {showStoryUploader && (
+        <StoryUploader
+          onClose={() => setShowStoryUploader(false)}
+          onUploaded={() => {
+            setShowStoryUploader(false)
+            setStoryRingKey(k => k + 1)
+          }}
+        />
+      )}
+
+      {viewingUserId && (
+        <StoryViewer
+          userId={viewingUserId}
+          onClose={() => {
+            setViewingUserId(null)
+            setStoryRingKey(k => k + 1)
+          }}
+        />
       )}
 
       {!explore && <TrendingBar topics={trendingTopics} />}

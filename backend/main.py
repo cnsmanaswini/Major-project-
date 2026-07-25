@@ -4,7 +4,7 @@ FastAPI Backend Entry Point
 """
 from dotenv import load_dotenv
 load_dotenv()
-
+from routers import stories
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -76,7 +76,7 @@ app.include_router(agents.router,           prefix="/api/agents",       tags=["A
 # Serve locally uploaded media (used when Cloudinary is not configured)
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
-
+app.include_router(stories.router, prefix="/api/stories", tags=["stories"])
 
 @app.get("/")
 async def root():
@@ -90,3 +90,17 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from services.story_cleanup import purge_expired_stories
+
+scheduler = AsyncIOScheduler()
+
+@app.on_event("startup")
+async def start_scheduler():
+    scheduler.add_job(purge_expired_stories, "interval", minutes=15)
+    scheduler.start()
+
+@app.on_event("shutdown")
+async def stop_scheduler():
+    scheduler.shutdown()

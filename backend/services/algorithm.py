@@ -22,6 +22,7 @@ Diversity:
 - MMR re-ranking after scoring to avoid back-to-back same author/emotion
 """
 
+import logging
 import math
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,11 +31,14 @@ from sqlalchemy.orm import selectinload
 from collections import defaultdict
 
 from services.topic_utils import aggregate_trending_scores, topic_overlap_score
+from ai.agents.orchestrator import run_agents, EmotionSnapshot
 from models.models import (
     Post, User, Like, Comment, Follow,
     AgentDecision, EmotionLog, UserInterest, ImpressionLog,
     NotInterested, Report,
 )
+
+logger = logging.getLogger("mindgram.algorithm")
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -83,6 +87,9 @@ NOVELTY_WINDOW_DAYS = 14
 MMR_LAMBDA = 0.72                # relevance vs diversity trade-off
 AUTHOR_SUPPRESS_PENALTY = 0.35   # applied when author was marked not interested
 REPORTED_POST_PENALTY = 0.50
+
+# How many EmotionLog entries to pull for the agent orchestrator's history
+EMOTION_HISTORY_LIMIT = 20
 
 
 # ── Individual Scoring Functions ──────────────────────────────
@@ -661,3 +668,84 @@ async def record_impression(
         skip_rate = sum(recent) / len(recent)
         if skip_rate >= SKIP_RATE_THRESHOLD:
             await update_user_interests(user_id, emotion, db, weight=SKIP_PENALTY)
+
+
+# ── Behavioral Signal Helpers (non-text interactions) ─────────
+
+async def _get_emotion_history_for_agent(user_id: int, db: AsyncSession) -> list[EmotionSnapshot]:
+    """
+    Self-contained EmotionLog history loader for the agent orchestrator.
+    Deliberately NOT imported from routers/posts.py — that module imports
+    from this one (services.algorithm), so importing back would create a
+    circular import. This is a duplicate of routers.posts.get_emotion_history
+    by necessity; if that query's shape ever changes, mirror the change here.
+    """
+    result = await db.execute(
+        select(EmotionLog)
+        .where(EmotionLog.user_id == user_id)
+        .order_by(EmotionLog.timestamp.desc())
+        .limit(EMOTION_HISTORY_LIMIT)
+    )
+    logs = result.scalars().all()
+    return [
+        EmotionSnapshot(
+            sentiment_score=log.sentiment_score,
+            emotion=log.emotion,
+            emotion_score=log.emotion_score,
+            risk_score=log.risk_score,
+            source=log.source,
+        )
+        for log in reversed(logs)
+    ]
+
+
+async def log_like_behavioral_signal(liker_id: int, post: Post, db: AsyncSession):
+    """
+    Likes have no text of their own to run through analyze_text, so instead
+    of re-analyzing, this treats "user liked this post" as a behavioral
+    signal about the LIKER: it logs the liked post's existing emotion/risk
+    scores into the liker's own EmotionLog trail (source="like") and lets
+    the agent orchestrator evaluate it against their trajectory. Repeatedly
+    engaging with high-risk content is itself a pattern worth catching,
+    separate from the post author's own risk pipeline.
+
+    Shared by both like endpoints (routers/interactions.py's
+    record_interaction and routers/posts.py's toggle_like) so the behavior
+    is consistent regardless of which one the frontend calls.
+
+    Best-effort: logs and swallows errors rather than failing the like
+    itself, since a like succeeding is more important than this signal.
+    """
+    try:
+        history = await _get_emotion_history_for_agent(liker_id, db)
+        current_snap = EmotionSnapshot(
+            sentiment_score=post.sentiment_score,
+            emotion=post.emotion,
+            emotion_score=post.emotion_score,
+            risk_score=post.risk_score,
+            source="like",
+        )
+        log = EmotionLog(
+            user_id=liker_id,
+            sentiment_score=post.sentiment_score,
+            emotion=post.emotion,
+            emotion_score=post.emotion_score,
+            risk_score=post.risk_score,
+            source="like",
+        )
+        db.add(log)
+
+        agent_report = run_agents(current_snap, history)
+        db.add(AgentDecision(
+            user_id=liker_id,
+            risk_level=agent_report.risk_level,
+            decision=agent_report.decision,
+            intervention=agent_report.intervention,
+            rag_suggestion=agent_report.rag_suggestion,
+            metadata_json=agent_report.metadata,
+        ))
+        log.agent_action = agent_report.decision
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Like behavioral-signal logging failed for user_id=%s", liker_id)

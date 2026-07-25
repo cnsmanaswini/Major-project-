@@ -24,19 +24,49 @@ _POST_MIGRATIONS = [
     ("topics", "JSON"),
 ]
 
+_STORY_MIGRATIONS = [
+    ("image_public_id", "VARCHAR(255) DEFAULT ''"),
+    ("video_public_id", "VARCHAR(255) DEFAULT ''"),
+]
 
-def _migrate_posts_table(connection) -> None:
+# Comments previously only stored `sentiment`. This brings them up to the
+# same AI-annotation surface as Post so the silent pipeline can run on
+# comments too (emotion, sarcasm, risk_score, feed_score).
+_COMMENT_MIGRATIONS = [
+    ("sentiment_score", "FLOAT DEFAULT 0.0"),
+    ("emotion", "VARCHAR(30) DEFAULT 'neutral'"),
+    ("emotion_score", "FLOAT DEFAULT 0.0"),
+    ("sarcasm", "BOOLEAN DEFAULT 0"),
+    ("sarcasm_score", "FLOAT DEFAULT 0.0"),
+    ("risk_score", "FLOAT DEFAULT 0.0"),
+    ("feed_score", "FLOAT DEFAULT 0.5"),
+]
+
+
+def _migrate_table(connection, table_name: str, migrations: list[tuple[str, str]]) -> None:
     inspector = inspect(connection)
-    if "posts" not in inspector.get_table_names():
+    if table_name not in inspector.get_table_names():
         return
 
-    existing = {col["name"] for col in inspector.get_columns("posts")}
-    for column_name, column_def in _POST_MIGRATIONS:
+    existing = {col["name"] for col in inspector.get_columns(table_name)}
+    for column_name, column_def in migrations:
         if column_name not in existing:
             connection.execute(
-                text(f"ALTER TABLE posts ADD COLUMN {column_name} {column_def}")
+                text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
             )
-            logger.info("Added posts.%s", column_name)
+            logger.info("Added %s.%s", table_name, column_name)
+
+
+def _migrate_posts_table(connection) -> None:
+    _migrate_table(connection, "posts", _POST_MIGRATIONS)
+
+
+def _migrate_stories_table(connection) -> None:
+    _migrate_table(connection, "stories", _STORY_MIGRATIONS)
+
+
+def _migrate_comments_table(connection) -> None:
+    _migrate_table(connection, "comments", _COMMENT_MIGRATIONS)
 
 
 def _backfill_post_media(connection) -> None:
@@ -119,6 +149,8 @@ async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_migrate_posts_table)
+        await conn.run_sync(_migrate_stories_table)
+        await conn.run_sync(_migrate_comments_table)
         await conn.run_sync(_backfill_post_media)
         await conn.run_sync(_backfill_post_topics)
 

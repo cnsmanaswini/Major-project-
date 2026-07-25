@@ -108,20 +108,39 @@ class PostMedia(Base):
 
 class Story(Base):
     __tablename__ = "stories"
-    id         = Column(Integer, primary_key=True, index=True)
-    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False)
-    image_url  = Column(String(500), default="")
-    video_url  = Column(String(500), default="")
-    text       = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime)  # 24 hours after creation
-    views      = Column(Integer, default=0)
+    id               = Column(Integer, primary_key=True, index=True)
+    user_id          = Column(Integer, ForeignKey("users.id"), nullable=False)
+    image_url        = Column(String(500), default="")
+    video_url        = Column(String(500), default="")
+    image_public_id  = Column(String(255), default="")
+    video_public_id  = Column(String(255), default="")
+    text             = Column(Text, default="")
+    created_at       = Column(DateTime, default=datetime.utcnow)
+    expires_at       = Column(DateTime)  # 24 hours after creation
+    views            = Column(Integer, default=0)
 
     # AI
     sentiment  = Column(String(20), default="neutral")
     risk_score = Column(Float, default=0.0)
 
     author = relationship("User", back_populates="stories")
+    story_views = relationship("StoryView", back_populates="story", cascade="all, delete-orphan")
+
+
+class StoryView(Base):
+    """Individual story view records — powers both 'who viewed my story'
+    and 'what stories have I viewed' (personal viewing history).
+    One row per (viewer, story) pair — rewatching a story updates
+    viewed_at rather than creating duplicates, matching Instagram's
+    behavior where views_count means unique viewers, not total opens."""
+    __tablename__ = "story_views"
+    id         = Column(Integer, primary_key=True, index=True)
+    story_id   = Column(Integer, ForeignKey("stories.id"), nullable=False, index=True)
+    viewer_id  = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    viewed_at  = Column(DateTime, default=datetime.utcnow)
+
+    story  = relationship("Story", back_populates="story_views")
+    viewer = relationship("User")
 
 
 class Comment(Base):
@@ -131,8 +150,18 @@ class Comment(Base):
     user_id    = Column(Integer, ForeignKey("users.id"), nullable=False)
     content    = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    sentiment  = Column(String(20), default="neutral")
     likes      = Column(Integer, default=0)
+
+    # AI annotations — mirrors Post's pipeline output so comments get the
+    # same silent risk/emotion tracking, not just a bare sentiment label.
+    sentiment        = Column(String(20), default="neutral")
+    sentiment_score  = Column(Float, default=0.0)
+    emotion          = Column(String(30), default="neutral")
+    emotion_score    = Column(Float, default=0.0)
+    sarcasm          = Column(Boolean, default=False)
+    sarcasm_score    = Column(Float, default=0.0)
+    risk_score       = Column(Float, default=0.0)
+    feed_score       = Column(Float, default=0.5)
 
     post = relationship("Post", back_populates="comments")
     user = relationship("User")
