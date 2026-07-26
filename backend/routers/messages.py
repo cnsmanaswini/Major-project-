@@ -2,7 +2,7 @@
 """
 Messages Router — Real-time WebSocket chat
 GET  /api/messages/conversations     → list conversations
-GET  /api/messages/thread/{user_id}  → get message thread
+GET  /api/messages/thread/{user_id}/{other_user_id}  → get message thread
 POST /api/messages                   → send message (REST fallback)
 WS   /api/messages/ws/{user_id}      → WebSocket live chat
 """
@@ -10,11 +10,11 @@ WS   /api/messages/ws/{user_id}      → WebSocket live chat
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_
-from typing import Dict, List, Optional
+from typing import Dict, List
 import json
 from services.notification_service import create_notification
 from models.database import get_db
-from models.models import Message, User, EmotionLog, Notification, Follow, AgentDecision
+from models.models import Message, User, Follow, EmotionLog, Notification, AgentDecision
 from schemas.schemas import MessageCreate, MessageOut
 from routers.auth import get_current_user, get_optional_user
 from ai.pipeline.analyzer import analyze_text
@@ -228,24 +228,26 @@ async def websocket_chat(
 @router.post("", response_model=MessageOut, status_code=201)
 async def send_message(
     body: MessageCreate,
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     """REST fallback for sending messages."""
-    sender = current_user or await db.get(User, body.sender_id)
+    sender_id = body.sender_id
+    if current_user and current_user.id != sender_id:
+        raise HTTPException(status_code=403, detail="Sender mismatch with authenticated user")
+
+    sender = await db.get(User, sender_id)
     if not sender:
-        raise HTTPException(status_code=404, detail="User not found")
-    if current_user and current_user.id != body.sender_id:
-        raise HTTPException(status_code=403, detail="Cannot send messages as another user")
+        raise HTTPException(status_code=404, detail="Sender not found")
 
     receiver = await db.get(User, body.receiver_id)
     if not receiver:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Receiver not found")
 
-    pipeline = await _analyze_and_log_message(sender.id, body.content, db)
+    pipeline = await _analyze_and_log_message(sender_id, body.content, db)
 
     msg = Message(
-        sender_id=sender.id,
+        sender_id=sender_id,
         receiver_id=body.receiver_id,
         content=body.content,
         sentiment=pipeline.sentiment,
@@ -324,25 +326,25 @@ async def get_conversations(
     return list(conversations.values())
 
 
-@router.get("/thread/{other_user_id}", response_model=list[MessageOut])
+@router.get("/thread/{user_id}/{other_user_id}", response_model=list[MessageOut])
 async def get_thread(
+    user_id: int,
     other_user_id: int,
     limit: int = 50,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get message thread between current user and another user."""
+    """Get message thread between two users."""
     result = await db.execute(
         select(Message)
         .where(
             or_(
                 and_(
-                    Message.sender_id == current_user.id,
+                    Message.sender_id == user_id,
                     Message.receiver_id == other_user_id,
                 ),
                 and_(
                     Message.sender_id == other_user_id,
-                    Message.receiver_id == current_user.id,
+                    Message.receiver_id == user_id,
                 ),
             )
         )
@@ -351,41 +353,13 @@ async def get_thread(
     )
     messages = result.scalars().all()
 
-    # Mark as read
+    # Mark as read for the requested user
     for msg in messages:
-        if msg.receiver_id == current_user.id and not msg.is_read:
+        if msg.receiver_id == user_id and not msg.is_read:
             msg.is_read = True
     await db.commit()
 
     return messages
-
-
-@router.get("/thread/{user_a_id}/{user_b_id}", response_model=list[MessageOut])
-async def get_thread_between_users(
-    user_a_id: int,
-    user_b_id: int,
-    limit: int = 50,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get message thread between any two users by id."""
-    result = await db.execute(
-        select(Message)
-        .where(
-            or_(
-                and_(
-                    Message.sender_id == user_a_id,
-                    Message.receiver_id == user_b_id,
-                ),
-                and_(
-                    Message.sender_id == user_b_id,
-                    Message.receiver_id == user_a_id,
-                ),
-            )
-        )
-        .order_by(Message.created_at.asc())
-        .limit(limit)
-    )
-    return result.scalars().all()
 
 
 @router.get("/online-status/{user_id}")
