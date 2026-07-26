@@ -18,7 +18,7 @@ class User(Base):
     id              = Column(Integer, primary_key=True, index=True)
     username        = Column(String(50), unique=True, index=True, nullable=False)
     username_changed_at = Column(DateTime, nullable=True)  # tracks 15-day cooldown
-    email           = Column(String(255), unique=True, index=True, nullable=False)
+    email           = Column(String(255), unique=True, index=True, nullable=True)
     display_name    = Column(String(100))
     avatar_url      = Column(String(500), default="")
     bio             = Column(Text, default="")
@@ -47,15 +47,33 @@ class User(Base):
 
 class Follow(Base):
     __tablename__ = "follows"
-    id           = Column(Integer, primary_key=True, index=True)
-    follower_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # User who sends the follow request
+    follower_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # User who receives the follow request
     following_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at   = Column(DateTime, default=datetime.utcnow)
 
-    follower  = relationship("User", foreign_keys=[follower_id], back_populates="following")
-    following = relationship("User", foreign_keys=[following_id], back_populates="followers")
+    # requested -> waiting for approval
+    # accepted -> following
+    status = Column(String(20), default="accepted", nullable=False)
 
+    created_at = Column(DateTime, default=datetime.utcnow)
 
+    follower = relationship(
+        "User",
+        foreign_keys=[follower_id],
+        back_populates="following"
+    )
+
+    following = relationship(
+        "User",
+        foreign_keys=[following_id],
+        back_populates="followers"
+    )
+    
 class Post(Base):
     __tablename__ = "posts"
     id          = Column(Integer, primary_key=True, index=True)

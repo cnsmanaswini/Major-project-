@@ -2,22 +2,23 @@
 MindGram — Mental Health-Aware Social Media Platform
 FastAPI Backend Entry Point
 """
+
 from dotenv import load_dotenv
 load_dotenv()
-from routers import stories
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 
-from routers import posts, feed, messages, analytics, interactions, agents, users
-from routers.auth import router as auth_router
+from config import settings
 from models.database import create_tables
+from services.cloudinary_service import UPLOAD_ROOT
+from routers import auth, users, posts, feed, messages, notifications, analytics, interactions, agents
+
 from ai.pipeline.loader import preload_models
 from ai.rag.index import build_rag_index
-from config import settings
-from services.cloudinary_service import UPLOAD_ROOT
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mindgram")
@@ -25,21 +26,27 @@ logger = logging.getLogger("mindgram")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: initialize DB, preload models, build RAG index."""
-    logger.info("🚀 MindGram starting up...")
+    """Startup & Shutdown"""
+
+    logger.info("🚀 MindGram starting...")
+
     await create_tables()
     logger.info("✅ Database tables created")
+
     try:
         preload_models()
         logger.info("✅ AI models loaded")
     except Exception as e:
-        logger.warning(f"⚠️ AI models failed to load: {e}")
+        logger.warning(f"AI models failed: {e}")
+
     try:
         build_rag_index()
-        logger.info("✅ RAG FAISS index built")
+        logger.info("✅ RAG Index created")
     except Exception as e:
-        logger.warning(f"⚠️ RAG index failed: {e}")
+        logger.warning(f"RAG Index failed: {e}")
+
     yield
+
     logger.info("🛑 MindGram shutting down")
 
 
@@ -50,7 +57,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+
+# -------------------- CORS --------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -64,11 +73,12 @@ app.add_middleware(
 )
 
 # Routers
-app.include_router(auth_router,             prefix="/api/auth",         tags=["Auth"])
+app.include_router(auth.router,             prefix="/api/auth",         tags=["Auth"])
 app.include_router(users.router,            prefix="/api/users",        tags=["Users"])
 app.include_router(posts.router,            prefix="/api/posts",        tags=["Posts"])
 app.include_router(feed.router,             prefix="/api/feed",         tags=["Feed"])
 app.include_router(messages.router,         prefix="/api/messages",     tags=["Messages"])
+app.include_router(notifications.router,    prefix="/api/notifications", tags=["Notifications"])
 app.include_router(analytics.router,        prefix="/api/analytics",    tags=["Analytics"])
 app.include_router(interactions.router,     prefix="/api/interactions",  tags=["Interactions"])
 app.include_router(agents.router,           prefix="/api/agents",       tags=["Agents"])
@@ -76,7 +86,7 @@ app.include_router(agents.router,           prefix="/api/agents",       tags=["A
 # Serve locally uploaded media (used when Cloudinary is not configured)
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
-app.include_router(stories.router, prefix="/api/stories", tags=["stories"])
+
 
 @app.get("/")
 async def root():
@@ -90,17 +100,3 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
-
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from services.story_cleanup import purge_expired_stories
-
-scheduler = AsyncIOScheduler()
-
-@app.on_event("startup")
-async def start_scheduler():
-    scheduler.add_job(purge_expired_stories, "interval", minutes=15)
-    scheduler.start()
-
-@app.on_event("shutdown")
-async def stop_scheduler():
-    scheduler.shutdown()
