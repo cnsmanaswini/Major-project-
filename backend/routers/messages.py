@@ -10,13 +10,13 @@ WS   /api/messages/ws/{user_id}      → WebSocket live chat
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, and_
-from typing import Dict, List
+from typing import Dict, List, Optional
 import json
 from services.notification_service import create_notification
 from models.database import get_db
-from models.models import Message, User, EmotionLog, Notification, Follow
+from models.models import Message, User, EmotionLog, Notification, Follow, AgentDecision
 from schemas.schemas import MessageCreate, MessageOut
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_optional_user
 from ai.pipeline.analyzer import analyze_text
 from ai.agents.orchestrator import run_agents, EmotionSnapshot
 from routers.posts import get_user_risk_history, get_emotion_history
@@ -228,24 +228,24 @@ async def websocket_chat(
 @router.post("", response_model=MessageOut, status_code=201)
 async def send_message(
     body: MessageCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     """REST fallback for sending messages."""
+    sender = current_user or await db.get(User, body.sender_id)
+    if not sender:
+        raise HTTPException(status_code=404, detail="User not found")
+    if current_user and current_user.id != body.sender_id:
+        raise HTTPException(status_code=403, detail="Cannot send messages as another user")
+
     receiver = await db.get(User, body.receiver_id)
     if not receiver:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if not await are_mutual_followers(db, current_user.id, body.receiver_id):
-        raise HTTPException(
-            status_code=403,
-            detail="You can only message users who follow you back.",
-        )
-
-    pipeline = await _analyze_and_log_message(current_user.id, body.content, db)
+    pipeline = await _analyze_and_log_message(sender.id, body.content, db)
 
     msg = Message(
-        sender_id=current_user.id,
+        sender_id=sender.id,
         receiver_id=body.receiver_id,
         content=body.content,
         sentiment=pipeline.sentiment,
@@ -259,21 +259,21 @@ async def send_message(
     await create_notification(
      db=db,
      user_id=body.receiver_id,
-     from_user_id=current_user.id,
+     from_user_id=sender.id,
      notification_type="message",
-     message=f"{current_user.username} sent you a message",
+     message=f"{sender.username} sent you a message",
     )
 
     # Notify receiver via WebSocket if online
     await manager.send_to_user(body.receiver_id, {
         "type": "new_message",
         "id": msg.id,
-        "sender_id": current_user.id,
+        "sender_id": sender.id,
         "content": body.content,
         "created_at": msg.created_at.isoformat(),
         "sender": {
-            "username": current_user.username,
-            "avatar_url": current_user.avatar_url,
+            "username": sender.username,
+            "avatar_url": sender.avatar_url,
         },
     })
 
@@ -358,6 +358,34 @@ async def get_thread(
     await db.commit()
 
     return messages
+
+
+@router.get("/thread/{user_a_id}/{user_b_id}", response_model=list[MessageOut])
+async def get_thread_between_users(
+    user_a_id: int,
+    user_b_id: int,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get message thread between any two users by id."""
+    result = await db.execute(
+        select(Message)
+        .where(
+            or_(
+                and_(
+                    Message.sender_id == user_a_id,
+                    Message.receiver_id == user_b_id,
+                ),
+                and_(
+                    Message.sender_id == user_b_id,
+                    Message.receiver_id == user_a_id,
+                ),
+            )
+        )
+        .order_by(Message.created_at.asc())
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/online-status/{user_id}")

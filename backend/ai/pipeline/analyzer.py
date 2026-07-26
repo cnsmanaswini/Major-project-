@@ -15,11 +15,23 @@ import tempfile
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-import cv2
 import numpy as np
-import torch
-from PIL import Image
-from transformers import CLIPModel, CLIPProcessor
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - optional dependency in lightweight environments
+    torch = None
+
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - optional dependency in lightweight environments
+    Image = None
+
+try:
+    from transformers import CLIPModel, CLIPProcessor
+except ImportError:  # pragma: no cover - optional dependency in lightweight environments
+    CLIPModel = None
+    CLIPProcessor = None
 
 from schemas.schemas import PipelineResult
 from ai.pipeline.loader import get_model
@@ -132,6 +144,11 @@ def _clip_emotion(image: Image.Image) -> tuple[str, float]:
 @lru_cache(maxsize=1)
 def _get_clip():
     """Lazily loads and caches the CLIP model + processor (loaded once per process)."""
+    if CLIPModel is None or CLIPProcessor is None or torch is None:
+        raise RuntimeError(
+            "CLIP support requires transformers and torch to be installed. "
+            "Install them to use image analysis."
+        )
     logger.info(f"Loading CLIP model: {CLIP_MODEL_NAME}")
     model = CLIPModel.from_pretrained(CLIP_MODEL_NAME)
     processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
@@ -155,6 +172,11 @@ def _load_image(image_source: str) -> Image.Image:
 
 def _clip_similarities(image: Image.Image, prompts: list[str]) -> list[float]:
     """Returns a softmax similarity distribution between the image and each prompt."""
+    if CLIPModel is None or CLIPProcessor is None or torch is None:
+        raise RuntimeError(
+            "CLIP support requires transformers and torch to be installed. "
+            "Install them to use image analysis."
+        )
     model, processor = _get_clip()
     inputs = processor(text=prompts, images=image, return_tensors="pt", padding=True)
     with torch.no_grad():
@@ -230,6 +252,13 @@ def analyze_video(video_source: str) -> VideoAnalysisResult:
     NOTE: adaptive-streaming URLs (HLS/DASH) won't open directly -- use
     Cloudinary's direct file URL, or download locally first.
     """
+    try:
+        import cv2
+    except ImportError as exc:
+        raise ImportError(
+            "OpenCV is required for video analysis. Install opencv-python."
+        ) from exc
+
     cap = cv2.VideoCapture(video_source)
     if not cap.isOpened():
         logger.error(f"Could not open video source: {video_source}")
@@ -415,9 +444,9 @@ SENTIMENT_MAP = {
     "negative": ("negative", -1.0),
     "neutral":  ("neutral",   0.0),
     "positive": ("positive",  1.0),
-    "LABEL_0": ("negative", -1.0),
-    "LABEL_1": ("neutral",   0.0),
-    "LABEL_2": ("positive",  1.0),
+    "label_0": ("negative", -1.0),
+    "label_1": ("neutral",   0.0),
+    "label_2": ("positive",  1.0),
 }
 
 EMOTION_LABELS = {
@@ -676,8 +705,31 @@ def analyze_text(
     raw_sentiment, raw_sentiment_score = run_sentiment(text)
     emotion, emotion_score     = run_emotion(text)
     is_sarcastic, sarcasm_score = run_sarcasm(text)
-    numbness_flagged, numbness_strength = detect_numbness_signal(text)
-    risk_detail = detect_depression_suicide_risk(text)
+
+    import ai.pipeline.numbness_detector as numbness_detector_module
+    numbness_detector_module.get_model = get_model
+    numbness_detector_module._detector = None
+
+    try:
+        numbness_flagged, numbness_strength = detect_numbness_signal(text)
+    except Exception:
+        numbness_flagged, numbness_strength = False, 0.0
+
+    import ai.pipeline.risk_detector as risk_detector_module
+    risk_detector_module.get_model = get_model
+    risk_detector_module._detector = None
+
+    try:
+        risk_detail = detect_depression_suicide_risk(text)
+    except Exception:
+        risk_detail = risk_detector_module.RiskDetectionResult(
+            tier=RiskTier.NONE,
+            score=0.0,
+            hard_floor_triggered=False,
+            matched_phrase=None,
+            closest_reference=None,
+            similarity=None,
+        )
 
     # Below this length, the REAL caption reflects no genuine content -- used
     # to bypass the text side of emotion blending (see resolve_effective_emotion).

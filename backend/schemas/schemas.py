@@ -74,6 +74,7 @@ class PostOut(BaseModel):
     comments_count: int
     media: List[PostMediaOut] = Field(default_factory=list)
     is_liked: bool = False
+    is_wellness: bool = False
     author: Optional[UserOut] = None
 
     class Config:

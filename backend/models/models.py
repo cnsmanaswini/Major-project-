@@ -18,7 +18,7 @@ class User(Base):
     id              = Column(Integer, primary_key=True, index=True)
     username        = Column(String(50), unique=True, index=True, nullable=False)
     username_changed_at = Column(DateTime, nullable=True)  # tracks 15-day cooldown
-    email           = Column(String(255), unique=True, index=True, nullable=False)
+    email           = Column(String(255), unique=True, index=True, nullable=True)
     display_name    = Column(String(100))
     avatar_url      = Column(String(500), default="")
     bio             = Column(Text, default="")

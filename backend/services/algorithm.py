@@ -307,6 +307,23 @@ def compute_rank(
 
 # ── Wellness Content Injection ────────────────────────────────
 
+WELLNESS_CONTENT_KEYWORDS = {
+    "wellness", "self-care", "self care", "mindfulness", "mental health",
+    "calm", "peace", "gratitude", "support", "resilience", "balance",
+    "breathe", "breathing", "relax", "reflection",
+}
+WELLNESS_TOPIC_KEYWORDS = {
+    "wellness", "self-care", "self care", "mindfulness", "mental health",
+    "calm", "peace", "gratitude", "support", "resilience", "balance",
+}
+WELLNESS_RECENCY_DAYS = 21
+WELLNESS_POOL_LIMIT = 50
+WELLNESS_INJECTION_LIMIT = 2
+WELLNESS_RISK_SCORE_MAX = 0.25
+WELLNESS_MIN_FEED_SCORE = 0.45
+WELLNESS_INJECTION_POSITIONS = (5, 10)
+
+
 def should_inject_wellness(user_risk: float, position: int) -> bool:
     """
     Decide if we should inject a wellness post at this feed position.
@@ -314,7 +331,77 @@ def should_inject_wellness(user_risk: float, position: int) -> bool:
     """
     if user_risk < RISK_SUPPRESSION_THRESHOLD:
         return False
-    return position in (5, 10)
+    return position in WELLNESS_INJECTION_POSITIONS
+
+
+def _matches_wellness_content(post: Post) -> bool:
+    """Heuristic match for wellness-oriented posts."""
+    text = (post.content or "").lower()
+    if any(keyword in text for keyword in WELLNESS_CONTENT_KEYWORDS):
+        return True
+
+    topics = post.topics or []
+    for topic in topics:
+        if not topic:
+            continue
+        topic_text = topic.lower()
+        if any(keyword in topic_text for keyword in WELLNESS_TOPIC_KEYWORDS):
+            return True
+
+    return False
+
+
+async def _load_wellness_candidates(
+    user_id: int,
+    db: AsyncSession,
+    exclude_post_ids: set[int],
+) -> list[Post]:
+    """Fetch a small candidate pool of wellness content for injection."""
+    cutoff = datetime.utcnow() - timedelta(days=WELLNESS_RECENCY_DAYS)
+
+    query = select(Post).options(selectinload(Post.media)).where(
+        Post.created_at >= cutoff,
+        Post.user_id != user_id,
+        Post.sentiment == "positive",
+        Post.risk_score <= WELLNESS_RISK_SCORE_MAX,
+        Post.feed_score >= WELLNESS_MIN_FEED_SCORE,
+    )
+    if exclude_post_ids:
+        query = query.where(Post.id.notin_(exclude_post_ids))
+
+    result = await db.execute(
+        query.order_by(Post.feed_score.desc()).limit(WELLNESS_POOL_LIMIT)
+    )
+
+    candidates = [post for post in result.scalars().all() if _matches_wellness_content(post)]
+    return candidates[:WELLNESS_INJECTION_LIMIT]
+
+
+def _inject_wellness_posts(
+    posts: list[Post],
+    wellness_posts: list[Post],
+    user_risk: float,
+) -> list[Post]:
+    """Inject wellness posts into the ranked feed at set positions."""
+    if not wellness_posts:
+        return posts
+
+    existing_ids = {post.id for post in posts}
+    injected: list[Post] = []
+    candidate_index = 0
+
+    for position, post in enumerate(posts, start=1):
+        while candidate_index < len(wellness_posts) and should_inject_wellness(user_risk, position):
+            candidate = wellness_posts[candidate_index]
+            candidate_index += 1
+            if candidate.id in existing_ids:
+                continue
+            candidate.is_wellness = True
+            injected.append(candidate)
+            break
+        injected.append(post)
+
+    return injected
 
 
 # ── Feed Context Loaders ──────────────────────────────────────
@@ -577,6 +664,17 @@ async def build_feed(
     scored_posts.sort(key=lambda item: item["rank_score"], reverse=True)
 
     ranked_posts = diversity_rerank(scored_posts, limit=len(scored_posts))
+
+    wellness_candidates = await _load_wellness_candidates(
+        user_id,
+        db,
+        exclude_post_ids={p.id for p in ranked_posts},
+    )
+    ranked_posts = _inject_wellness_posts(ranked_posts, wellness_candidates, user_risk)
+
+    for post in ranked_posts:
+        if not hasattr(post, "is_wellness"):
+            post.is_wellness = False
 
     # 6 — Return paginated results
     return ranked_posts[offset:offset + limit]

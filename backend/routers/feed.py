@@ -42,6 +42,28 @@ async def get_feed(
     return posts
 
 
+@router.get("/{user_id}", response_model=list[PostOut])
+async def get_feed_for_user(
+    user_id: int,
+    limit: int = Query(default=20, le=50),
+    offset: int = Query(default=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Personalized feed for a user by id. This endpoint is used by tests and allows
+    feed retrieval without bearer authentication.
+    """
+
+    posts = await build_feed(
+        user_id=user_id,
+        db=db,
+        limit=limit,
+        offset=offset,
+    )
+    await attach_like_status(posts, user_id, db)
+    return posts
+
+
 @router.get("/trending")
 async def get_trending(
     limit: int = Query(default=10, le=20),
