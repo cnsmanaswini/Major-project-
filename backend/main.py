@@ -6,9 +6,6 @@ FastAPI Backend Entry Point
 from dotenv import load_dotenv
 load_dotenv()
 
-import logging
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -83,6 +80,10 @@ app.include_router(analytics.router,        prefix="/api/analytics",    tags=["A
 app.include_router(interactions.router,     prefix="/api/interactions",  tags=["Interactions"])
 app.include_router(agents.router,           prefix="/api/agents",       tags=["Agents"])
 
+# Serve locally uploaded media (used when Cloudinary is not configured)
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
+
 
 @app.get("/")
 async def root():
@@ -95,6 +96,4 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {
-        "status": "healthy"
-    }
+    return {"status": "healthy"}

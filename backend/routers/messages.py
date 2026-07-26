@@ -14,10 +14,12 @@ from typing import Dict, List
 import json
 from services.notification_service import create_notification
 from models.database import get_db
-from models.models import Message, User, EmotionLog, Notification
+from models.models import Message, User, EmotionLog, Notification, Follow
 from schemas.schemas import MessageCreate, MessageOut
 from routers.auth import get_current_user
 from ai.pipeline.analyzer import analyze_text
+from ai.agents.orchestrator import run_agents, EmotionSnapshot
+from routers.posts import get_user_risk_history, get_emotion_history
 
 router = APIRouter()
 
@@ -36,6 +38,56 @@ async def are_mutual_followers(db: AsyncSession, user_a_id: int, user_b_id: int)
     a_follows_b = any(f.follower_id == user_a_id and f.following_id == user_b_id for f in follows)
     b_follows_a = any(f.follower_id == user_b_id and f.following_id == user_a_id for f in follows)
     return a_follows_b and b_follows_a
+
+
+async def _analyze_and_log_message(sender_id: int, content: str, db: AsyncSession):
+    """
+    Shared DM analysis path — mirrors routers/posts.py's post-creation
+    pipeline (risk history -> analyze_text -> EmotionLog -> agent check ->
+    AgentDecision) so a DM saying something acutely concerning can trigger
+    the same intervention path a post would, not just a silently-stored
+    risk_score nobody acts on.
+
+    Scoped to the SENDER — a message reflects the sender's state, same as
+    EmotionLog(source="message") already being keyed on user_id=sender.
+
+    Returns the PipelineResult so callers can still populate the Message
+    row and websocket payload as before.
+    """
+    risk_history = await get_user_risk_history(sender_id, db)
+    pipeline = analyze_text(content, risk_history)
+
+    log = EmotionLog(
+        user_id=sender_id,
+        sentiment_score=pipeline.sentiment_score,
+        emotion=pipeline.emotion,
+        emotion_score=pipeline.emotion_score,
+        risk_score=pipeline.risk_score,
+        source="message",
+    )
+    db.add(log)
+
+    history = await get_emotion_history(sender_id, db)
+    current_snap = EmotionSnapshot(
+        sentiment_score=pipeline.sentiment_score,
+        emotion=pipeline.emotion,
+        emotion_score=pipeline.emotion_score,
+        risk_score=pipeline.risk_score,
+        source="message",
+    )
+    agent_report = run_agents(current_snap, history)
+
+    db.add(AgentDecision(
+        user_id=sender_id,
+        risk_level=agent_report.risk_level,
+        decision=agent_report.decision,
+        intervention=agent_report.intervention,
+        rag_suggestion=agent_report.rag_suggestion,
+        metadata_json=agent_report.metadata,
+    ))
+    log.agent_action = agent_report.decision
+
+    return pipeline
 
 
 # ── WebSocket Connection Manager ──────────────────────────────
@@ -114,8 +166,8 @@ async def websocket_chat(
                 })
                 continue
 
-            # Run AI pipeline silently
-            pipeline = analyze_text(content)
+            # Run AI pipeline silently (risk-history-aware, agent-checked)
+            pipeline = await _analyze_and_log_message(user_id, content, db)
 
             # Save message
             msg = Message(
@@ -127,16 +179,6 @@ async def websocket_chat(
                 risk_score=pipeline.risk_score,
             )
             db.add(msg)
-
-            # Log emotion
-            db.add(EmotionLog(
-                user_id=user_id,
-                sentiment_score=pipeline.sentiment_score,
-                emotion=pipeline.emotion,
-                emotion_score=pipeline.emotion_score,
-                risk_score=pipeline.risk_score,
-                source="message",
-            ))
 
             await db.commit()
             await db.refresh(msg)
@@ -199,8 +241,8 @@ async def send_message(
             status_code=403,
             detail="You can only message users who follow you back.",
         )
-        
-    pipeline = analyze_text(body.content)
+
+    pipeline = await _analyze_and_log_message(current_user.id, body.content, db)
 
     msg = Message(
         sender_id=current_user.id,
@@ -211,15 +253,6 @@ async def send_message(
         risk_score=pipeline.risk_score,
     )
     db.add(msg)
-
-    db.add(EmotionLog(
-        user_id=current_user.id,
-        sentiment_score=pipeline.sentiment_score,
-        emotion=pipeline.emotion,
-        emotion_score=pipeline.emotion_score,
-        risk_score=pipeline.risk_score,
-        source="message",
-    ))
 
     await db.commit()
     await db.refresh(msg)
